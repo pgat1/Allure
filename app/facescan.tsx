@@ -1,4 +1,5 @@
 import { supabase } from '@/app/lib/supabase';
+import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
@@ -239,6 +240,7 @@ export default function FaceScanScreen() {
   }
 
   if (phase === 'intro') return (
+    <View style={{ flex: 1 }}>
     <ScrollView contentContainerStyle={s.scroll}>
       <Text style={s.logo}>Allure</Text>
       <Text style={s.title}>AI Face Scan</Text>
@@ -287,6 +289,10 @@ export default function FaceScanScreen() {
 
       <Text style={s.privacy}>🔒 Live scan only — never stored or shared</Text>
     </ScrollView>
+    <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+      <Ionicons name="chevron-back" size={24} color="#ff4d82" />
+    </TouchableOpacity>
+    </View>
   );
 
   if (phase === 'camera') {
@@ -403,7 +409,7 @@ export default function FaceScanScreen() {
         </Text>
       </View>
 
-      <TouchableOpacity style={s.btn} onPress={() => router.push('/swipe')}>
+      <TouchableOpacity style={s.btn} onPress={() => router.replace('/swipe')}>
         <Text style={s.btnTxt}>Start Matching ✨</Text>
       </TouchableOpacity>
     </ScrollView>
@@ -464,4 +470,5 @@ const s = StyleSheet.create({
   statL:        { fontSize:10, color:'rgba(255,255,255,0.3)', marginTop:2, textTransform:'uppercase', letterSpacing:.5 },
   lockedBox:    { backgroundColor:'rgba(255,255,255,0.04)', borderRadius:12, padding:14, marginBottom:20, borderWidth:1, borderColor:'rgba(255,255,255,0.08)', width:'100%' },
   lockedTxt:    { fontSize:12, color:'rgba(255,255,255,0.4)', textAlign:'center', lineHeight:18 },
+  backBtn:      { position:'absolute', top:54, left:16, width:38, height:38, borderRadius:19, backgroundColor:'rgba(0,0,0,0.45)', alignItems:'center', justifyContent:'center' },
 });

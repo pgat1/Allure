@@ -1,49 +1,251 @@
 import { supabase } from '@/app/lib/supabase';
+import { sendMessageNotification } from '@/app/lib/notifications';
+import { useToast } from '@/app/lib/Toast';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useNavigation } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
   FlatList,
   Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 
+const { width: SCREEN_W } = Dimensions.get('window');
+
+const TAB_STYLE = {
+  backgroundColor: 'transparent',
+  borderTopWidth: 0,
+  height: 62,
+  paddingBottom: 14,
+  paddingTop: 6,
+  marginHorizontal: 16,
+  marginBottom: 20,
+  borderRadius: 30,
+  position: 'absolute' as const,
+  elevation: 0,
+  shadowColor: '#ff4d82',
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.4,
+  shadowRadius: 12,
+};
+
+const ANTHROPIC_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_KEY ?? '';
+
 export default function ChatScreen() {
-  const router = useRouter();
-  const [matches, setMatches]   = useState<any[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [search, setSearch]     = useState('');
+  const navigation = useNavigation();
+  const { showToast, toastJSX } = useToast();
+  const [screen, setScreen]             = useState<'list' | 'convo'>('list');
+  const [matches, setMatches]           = useState<any[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [search, setSearch]             = useState('');
+  const [currentUser, setCurrentUser]   = useState<any>(null);
+  const [activeMatch, setActiveMatch]   = useState<any>(null);
+  const [messages, setMessages]         = useState<any[]>([]);
+  const [message, setMessage]           = useState('');
+  const [wingmanModal, setWingmanModal] = useState(false);
+  const [wingmanLines, setWingmanLines] = useState<string[]>([]);
+  const [wingmanLoading, setWingmanLoading] = useState(false);
+  const [activeSub, setActiveSub]       = useState<any>(null);
+  const [profileModal, setProfileModal] = useState(false);
+  const [matchRowIds, setMatchRowIds]   = useState<Record<string, string>>({});
+  const flatListRef = useRef<FlatList>(null);
+  const screenRef   = useRef<'list' | 'convo'>('list');
+  const matchesRef  = useRef<any[]>([]);
 
-  useEffect(() => { loadMatches(); }, []);
+  useEffect(() => {
+    navigation.setOptions({ tabBarStyle: screen === 'convo' ? { display: 'none' } : TAB_STYLE });
+    screenRef.current = screen;
+  }, [screen]);
 
-  async function loadMatches() {
+  useEffect(() => { init(); }, []);
+
+  // Global subscription: notify for new messages when convo is NOT open
+  useEffect(() => {
+    if (!currentUser || Object.keys(matchRowIds).length === 0) return;
+    const subs = Object.entries(matchRowIds).map(([profileId, matchRowId]) =>
+      supabase
+        .channel(`global:${matchRowId}`)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `match_id=eq.${matchRowId}`,
+        }, (payload) => {
+          if (payload.new.sender_id !== currentUser.id && screenRef.current === 'list') {
+            const profile = matchesRef.current.find(m => m.id === profileId);
+            sendMessageNotification(
+              profile?.name?.split(' ')[0] || 'Someone',
+              payload.new.content
+            );
+          }
+        })
+        .subscribe()
+    );
+    return () => { subs.forEach(s => s.unsubscribe()); };
+  }, [currentUser?.id, matchRowIds]);
+
+  async function init() {
+    const { data: userData } = await supabase.auth.getUser();
+    if (!userData.user) return;
+    setCurrentUser(userData.user);
+    await loadMatches(userData.user.id);
+  }
+
+  async function loadMatches(userId: string) {
     setLoading(true);
+    const { data: matchesData } = await supabase
+      .from('matches').select('*')
+      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`);
+    if (matchesData && matchesData.length > 0) {
+      const rowIds: Record<string, string> = {};
+      const matchProfileIds = matchesData.map(m => {
+        const otherId = m.user1_id === userId ? m.user2_id : m.user1_id;
+        rowIds[otherId] = m.id;
+        return otherId;
+      });
+      setMatchRowIds(rowIds);
+      const { data: matchProfiles } = await supabase
+        .from('profiles').select('*').in('id', matchProfileIds);
+      const profiles = matchProfiles || [];
+      setMatches(profiles);
+      matchesRef.current = profiles;
+    }
+    setLoading(false);
+  }
+
+  async function openConvo(match: any) {
+    setActiveMatch(match);
+    setScreen('convo');
+    const { data: matchRow } = await supabase
+      .from('matches').select('id')
+      .or(`and(user1_id.eq.${currentUser.id},user2_id.eq.${match.id}),and(user1_id.eq.${match.id},user2_id.eq.${currentUser.id})`)
+      .single();
+    if (!matchRow) return;
+    const { data } = await supabase
+      .from('messages').select('*')
+      .eq('match_id', matchRow.id)
+      .order('created_at', { ascending: true });
+    setMessages(data || []);
+    const matchRowId = matchRow.id;
+    setActiveMatch({ ...match, matchRowId });
+
+    // Mark existing unread messages as read
+    supabase
+      .from('messages')
+      .update({ read: true })
+      .eq('match_id', matchRowId)
+      .neq('sender_id', currentUser.id);
+
+    const sub = supabase
+      .channel(`messages:${matchRowId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `match_id=eq.${matchRowId}`,
+      }, (payload) => {
+        setMessages(prev => [...prev, payload.new]);
+        if (payload.new.sender_id !== currentUser?.id) {
+          // Convo is open — mark as read, no notification
+          supabase
+            .from('messages')
+            .update({ read: true })
+            .eq('id', payload.new.id);
+        }
+      })
+      .subscribe();
+    setActiveSub(sub);
+  }
+
+  function closeConvo() {
+    activeSub?.unsubscribe();
+    setActiveSub(null);
+    setScreen('list');
+  }
+
+  async function sendMessage() {
+    if (!message.trim() || !currentUser || !activeMatch?.matchRowId) return;
+    const content = message.trim();
+    setMessage('');
+
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      if (!userData.user) return;
-
-      const { data: matchesData } = await supabase
-        .from('matches').select('*')
-        .or(`user1_id.eq.${userData.user.id},user2_id.eq.${userData.user.id}`);
-
-      if (matchesData && matchesData.length > 0) {
-        const matchIds = matchesData.map(m =>
-          m.user1_id === userData.user.id ? m.user2_id : m.user1_id
-        );
-        const { data: matchProfiles } = await supabase
-          .from('profiles').select('*').in('id', matchIds);
-        setMatches(matchProfiles || []);
+      const modRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ANTHROPIC_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 10,
+          messages: [{
+            role: 'user',
+            content: `Is this message hate speech, a slur, sexually explicit, or harassment? Reply only YES or NO. Message: "${content}"`,
+          }],
+        }),
+      });
+      const modData = await modRes.json();
+      const verdict = modData.content[0].text.trim().toUpperCase();
+      if (verdict === 'YES') {
+        showToast('🚫', 'Message blocked', "This violates Allure's community guidelines.");
+        return;
       }
-    } catch (err) {
-      console.log('Error loading matches:', err);
+    } catch {
+      // moderation failed, allow through
+    }
+
+    const msg = {
+      sender_id: currentUser.id,
+      match_id: activeMatch.matchRowId,
+      content,
+      created_at: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, msg]);
+    await supabase.from('messages').insert(msg);
+  }
+
+  async function getWingmanSuggestions() {
+    setWingmanLoading(true);
+    setWingmanModal(true);
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ANTHROPIC_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{
+            role: 'user',
+            content: `You are Wingman, an AI for the dating app Allure. Generate 3 short, fun, confident conversation starters to send to ${activeMatch?.name}. Make them flirty but not creepy, unique, and not generic. Return ONLY a JSON array of 3 strings, nothing else.`,
+          }],
+        }),
+      });
+      const data = await response.json();
+      const parsed = JSON.parse(data.content[0].text);
+      setWingmanLines(parsed);
+    } catch {
+      showToast('🪽', 'Wingman failed', 'Try again!');
+      setWingmanModal(false);
     } finally {
-      setLoading(false);
+      setWingmanLoading(false);
     }
   }
 
@@ -54,31 +256,200 @@ export default function ChatScreen() {
     return '#ffaad0';
   }
 
+  function getTierEmoji(tier: string) {
+    if (tier === 'Celestial') return '♛';
+    if (tier === 'Luxe')      return '◈';
+    if (tier === 'Radiant')   return '❋';
+    return '✦';
+  }
+
   const filteredMatches = matches.filter(m =>
     m.name?.toLowerCase().includes(search.toLowerCase())
   );
 
-  if (loading) return (
-    <View style={s.container}>
-      <LinearGradient colors={['#1a0010','#0d0008','#000']} style={StyleSheet.absoluteFillObject} />
-      <ActivityIndicator color="#ff4d82" size="large" />
-    </View>
-  );
+  // ── CONVERSATION ──
+  if (screen === 'convo' && activeMatch) {
+    return (
+      <KeyboardAvoidingView
+        style={s.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <LinearGradient colors={['#2a0018','#150010','#0a0005']} style={StyleSheet.absoluteFillObject} />
+        <View style={s.convoHeader}>
+          <TouchableOpacity onPress={closeConvo}>
+            <Ionicons name="chevron-back" size={24} color="#ff4d82" />
+          </TouchableOpacity>
+          <TouchableOpacity style={s.convoHeaderCenter} onPress={() => setProfileModal(true)} activeOpacity={0.7}>
+            {activeMatch.profile_picture ? (
+              <Image source={{ uri: activeMatch.profile_picture }} style={s.convoAvatar} resizeMode="cover" />
+            ) : (
+              <View style={s.convoAvatarEmpty}>
+                <Ionicons name="person" size={16} color="rgba(255,255,255,0.3)" />
+              </View>
+            )}
+            <Text style={s.convoName}>{activeMatch.name}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={s.wingmanBtn} onPress={getWingmanSuggestions}>
+            <Text style={s.wingmanBtnTxt}>🪽 Wingman</Text>
+          </TouchableOpacity>
+        </View>
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={(_, i) => i.toString()}
+          contentContainerStyle={s.messagesList}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          ListEmptyComponent={
+            <View style={s.convoEmpty}>
+              <Text style={s.convoEmptyTxt}>No messages yet</Text>
+              <Text style={s.convoEmptySub}>Type something or use 🪽 Wingman!</Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            const isMe = item.sender_id === currentUser?.id;
+            return (
+              <View style={[s.bubble, isMe ? s.bubbleMe : s.bubbleThem]}>
+                <Text style={[s.bubbleTxt, isMe ? s.bubbleTxtMe : s.bubbleTxtThem]}>
+                  {item.content}
+                </Text>
+              </View>
+            );
+          }}
+        />
+        <View style={s.inputRow}>
+          <TextInput
+            style={s.input}
+            placeholder={`Message ${activeMatch.name}...`}
+            placeholderTextColor="rgba(255,255,255,0.2)"
+            value={message}
+            onChangeText={setMessage}
+            multiline
+          />
+          <TouchableOpacity style={s.sendBtn} onPress={sendMessage}>
+            <Ionicons name="send" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+        <Modal visible={wingmanModal} transparent animationType="slide">
+          <View style={s.modalOverlay}>
+            <View style={s.modalCard}>
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>🪽 Wingman AI</Text>
+                <TouchableOpacity onPress={() => setWingmanModal(false)}>
+                  <Ionicons name="close-circle" size={26} color="rgba(255,255,255,0.4)" />
+                </TouchableOpacity>
+              </View>
+              <Text style={s.modalSub}>Tap a line to use it — or type your own</Text>
+              {wingmanLoading ? (
+                <ActivityIndicator color="#ff4d82" size="large" style={{ marginVertical:30 }} />
+              ) : (
+                wingmanLines.map((line, i) => (
+                  <TouchableOpacity key={i} style={s.linePill} onPress={() => { setMessage(line); setWingmanModal(false); }}>
+                    <Text style={s.lineTxt}>{line}</Text>
+                    <Ionicons name="arrow-up-circle" size={20} color="#ff4d82" />
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
+          </View>
+        </Modal>
 
+        {/* Profile View Modal */}
+        <Modal visible={profileModal} transparent animationType="slide">
+          <View style={s.profileOverlay}>
+            <LinearGradient colors={['#2a0018','#150010','#0a0005']} style={StyleSheet.absoluteFillObject} />
+            <TouchableOpacity style={s.profileClose} onPress={() => setProfileModal(false)}>
+              <Ionicons name="close-circle" size={30} color="rgba(255,255,255,0.5)" />
+            </TouchableOpacity>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.profileScroll}>
+              {/* Main hero photo */}
+              <View style={s.profileHero}>
+                {activeMatch.photo_urls?.[0] ? (
+                  <Image source={{ uri: activeMatch.photo_urls[0] }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+                ) : (
+                  <View style={s.profileHeroEmpty}>
+                    <Ionicons name="person" size={60} color="rgba(255,255,255,0.1)" />
+                  </View>
+                )}
+                <LinearGradient colors={['transparent','#0a0005']} style={StyleSheet.absoluteFillObject} />
+              </View>
+
+              {/* Name / age / tier row */}
+              <View style={s.profileNameRow}>
+                <View>
+                  <Text style={s.profileName}>{activeMatch.name}{activeMatch.age ? `, ${activeMatch.age}` : ''}</Text>
+                </View>
+                {activeMatch.tier && (
+                  <View style={[s.profileTierPill, { backgroundColor: getTierColor(activeMatch.tier) + '22', borderColor: getTierColor(activeMatch.tier) + '66' }]}>
+                    <Text style={[s.profileTierTxt, { color: getTierColor(activeMatch.tier) }]}>
+                      {getTierEmoji(activeMatch.tier)} {activeMatch.tier} · {activeMatch.score ?? 0}
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Bio */}
+              {activeMatch.bio ? (
+                <Text style={s.profileBio}>{activeMatch.bio}</Text>
+              ) : null}
+
+              {/* All photos horizontal scroll */}
+              {activeMatch.photo_urls?.length > 1 && (
+                <>
+                  <Text style={s.profileSectionLabel}>Photos</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.photoRowContent}>
+                    {(activeMatch.photo_urls as string[]).filter(Boolean).map((url, i) => (
+                      <Image key={i} source={{ uri: url }} style={s.profilePhotoThumb} resizeMode="cover" />
+                    ))}
+                  </ScrollView>
+                </>
+              )}
+
+              {/* Interests */}
+              {activeMatch.interests?.length > 0 && (
+                <>
+                  <Text style={s.profileSectionLabel}>Interests</Text>
+                  <View style={s.profilePillsRow}>
+                    {(activeMatch.interests as any[]).map((int, i) => (
+                      <View key={i} style={s.profileInterestPill}>
+                        <Text style={s.profileInterestTxt}>{int.emoji} {int.label}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </>
+              )}
+
+              {/* Get to Know Me tags */}
+              {activeMatch.get_to_know_me && Object.keys(activeMatch.get_to_know_me).filter(k => activeMatch.get_to_know_me[k]).length > 0 && (
+                <>
+                  <Text style={s.profileSectionLabel}>Get to Know Me</Text>
+                  <View style={s.profileTagsGrid}>
+                    {Object.entries(activeMatch.get_to_know_me as Record<string,string>)
+                      .filter(([, v]) => v)
+                      .map(([k, v]) => (
+                        <View key={k} style={s.profileTag}>
+                          <Text style={s.profileTagTxt}>{v}</Text>
+                        </View>
+                      ))}
+                  </View>
+                </>
+              )}
+
+              <View style={{ height: 40 }} />
+            </ScrollView>
+          </View>
+        </Modal>
+      </KeyboardAvoidingView>
+    );
+  }
+
+  // ── MATCHES LIST ──
   return (
     <View style={s.container}>
-      <LinearGradient
-        colors={['#1a0010', '#0d0008', '#000']}
-        style={StyleSheet.absoluteFillObject}
-      />
-
-      {/* Header */}
+      <LinearGradient colors={['#2a0018','#150010','#0a0005']} style={StyleSheet.absoluteFillObject} />
       <View style={s.header}>
         <Text style={s.logo}>Allure</Text>
         <View style={s.logoLine} />
       </View>
-
-      {/* Search bar */}
       <View style={s.searchWrap}>
         <Ionicons name="search" size={16} color="rgba(255,255,255,0.2)" />
         <TextInput
@@ -89,9 +460,9 @@ export default function ChatScreen() {
           onChangeText={setSearch}
         />
       </View>
-
-      {/* Messages list */}
-      {filteredMatches.length === 0 ? (
+      {loading ? (
+        <ActivityIndicator color="#ff4d82" size="large" style={{ marginTop:40 }} />
+      ) : filteredMatches.length === 0 ? (
         <View style={s.empty}>
           <Ionicons name="chatbubble-outline" size={50} color="rgba(255,255,255,0.08)" />
           <Text style={s.emptyTxt}>No messages yet!</Text>
@@ -107,14 +478,10 @@ export default function ChatScreen() {
           renderItem={({ item }) => {
             const tierColor = getTierColor(item.tier);
             return (
-              <TouchableOpacity style={s.row} activeOpacity={0.7}>
+              <TouchableOpacity style={s.row} activeOpacity={0.7} onPress={() => openConvo(item)}>
                 <View style={s.avatarWrap}>
-                  {item.photo_urls?.[0] ? (
-                    <Image
-                      source={{ uri: item.photo_urls[0] }}
-                      style={s.avatar}
-                      resizeMode="cover"
-                    />
+                  {item.profile_picture ? (
+                    <Image source={{ uri: item.profile_picture }} style={s.avatar} resizeMode="cover" />
                   ) : (
                     <View style={s.avatarEmpty}>
                       <Ionicons name="person" size={20} color="rgba(255,255,255,0.2)" />
@@ -125,10 +492,10 @@ export default function ChatScreen() {
                 <View style={s.rowContent}>
                   <View style={s.rowTop}>
                     <Text style={s.rowName}>{item.name}</Text>
-                    <Text style={s.rowTime}>now</Text>
+                    <Text style={s.wingmanTag}>🪽 Wingman AI</Text>
                   </View>
                   <Text style={s.rowPreview} numberOfLines={1}>
-                    Say hi to {item.name?.split(' ')[0]}! 👋
+                    Tap to chat with {item.name?.split(' ')[0]}!
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -136,30 +503,79 @@ export default function ChatScreen() {
           }}
         />
       )}
+      {toastJSX}
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  container:    { flex:1, backgroundColor:'#000' },
-  header:       { flexDirection:'row', alignItems:'center', gap:6, paddingHorizontal:20, paddingTop:54, paddingBottom:12 },
-  logo:         { fontSize:18, fontWeight:'200', fontStyle:'italic', color:'#ff4d82', letterSpacing:4 },
-  logoLine:     { flex:1, height:0.5, backgroundColor:'rgba(255,77,130,0.3)', marginTop:3 },
-  searchWrap:   { flexDirection:'row', alignItems:'center', gap:10, marginHorizontal:20, marginBottom:12, backgroundColor:'rgba(255,255,255,0.04)', borderRadius:12, paddingHorizontal:14, paddingVertical:10, borderWidth:1, borderColor:'rgba(255,255,255,0.06)' },
-  searchInput:  { flex:1, fontSize:14, color:'#fff' },
-  empty:        { flex:1, alignItems:'center', justifyContent:'center', gap:10 },
-  emptyTxt:     { fontSize:18, fontWeight:'700', color:'rgba(255,255,255,0.3)' },
-  emptySub:     { fontSize:14, color:'rgba(255,255,255,0.15)', textAlign:'center' },
-  list:         { paddingHorizontal:20, paddingBottom:100 },
-  separator:    { height:1, backgroundColor:'rgba(255,255,255,0.04)', marginLeft:68 },
-  row:          { flexDirection:'row', alignItems:'center', paddingVertical:12, gap:14 },
-  avatarWrap:   { position:'relative' },
-  avatar:       { width:52, height:52, borderRadius:26 },
-  avatarEmpty:  { width:52, height:52, borderRadius:26, backgroundColor:'rgba(255,255,255,0.05)', alignItems:'center', justifyContent:'center', borderWidth:1, borderColor:'rgba(255,255,255,0.08)' },
-  tierDot:      { position:'absolute', bottom:1, right:1, width:10, height:10, borderRadius:5, borderWidth:1.5, borderColor:'#000' },
-  rowContent:   { flex:1 },
-  rowTop:       { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:4 },
-  rowName:      { fontSize:15, fontWeight:'700', color:'#fff' },
-  rowTime:      { fontSize:11, color:'rgba(255,255,255,0.2)' },
-  rowPreview:   { fontSize:13, color:'rgba(255,255,255,0.35)' },
+  container:      { flex:1, backgroundColor:'#000' },
+  header:         { flexDirection:'row', alignItems:'center', gap:6, paddingHorizontal:20, paddingTop:54, paddingBottom:12 },
+  logo:           { fontSize:18, fontWeight:'200', fontStyle:'italic', color:'#ff4d82', letterSpacing:4 },
+  logoLine:       { flex:1, height:0.5, backgroundColor:'rgba(255,77,130,0.3)', marginTop:3 },
+  searchWrap:     { flexDirection:'row', alignItems:'center', gap:10, marginHorizontal:20, marginBottom:12, backgroundColor:'rgba(255,255,255,0.07)', borderRadius:12, paddingHorizontal:14, paddingVertical:10, borderWidth:1, borderColor:'rgba(255,255,255,0.11)' },
+  searchInput:    { flex:1, fontSize:14, color:'#fff' },
+  empty:          { flex:1, alignItems:'center', justifyContent:'center', gap:10 },
+  emptyTxt:       { fontSize:18, fontWeight:'700', color:'rgba(255,255,255,0.48)' },
+  emptySub:       { fontSize:14, color:'rgba(255,255,255,0.3)', textAlign:'center' },
+  list:           { paddingHorizontal:20, paddingBottom:100 },
+  separator:      { height:1, backgroundColor:'rgba(255,255,255,0.07)', marginLeft:68 },
+  row:            { flexDirection:'row', alignItems:'center', paddingVertical:12, gap:14 },
+  avatarWrap:     { position:'relative' },
+  avatar:         { width:52, height:52, borderRadius:26 },
+  avatarEmpty:    { width:52, height:52, borderRadius:26, backgroundColor:'rgba(255,255,255,0.08)', alignItems:'center', justifyContent:'center', borderWidth:1, borderColor:'rgba(255,255,255,0.13)' },
+  tierDot:        { position:'absolute', bottom:1, right:1, width:10, height:10, borderRadius:5, borderWidth:1.5, borderColor:'#000' },
+  rowContent:     { flex:1 },
+  rowTop:         { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:4 },
+  rowName:        { fontSize:15, fontWeight:'700', color:'#fff' },
+  wingmanTag:     { fontSize:11, color:'#ff4d82', fontWeight:'600' },
+  rowPreview:     { fontSize:13, color:'rgba(255,255,255,0.52)' },
+  convoHeader:       { flexDirection:'row', alignItems:'center', justifyContent:'space-between', paddingHorizontal:16, paddingTop:54, paddingBottom:12, borderBottomWidth:1, borderBottomColor:'rgba(255,255,255,0.1)' },
+  convoHeaderCenter: { flexDirection:'row', alignItems:'center', gap:8 },
+  convoAvatar:       { width:32, height:32, borderRadius:16, borderWidth:1.5, borderColor:'#ff4d82' },
+  convoAvatarEmpty:  { width:32, height:32, borderRadius:16, backgroundColor:'rgba(255,255,255,0.08)', alignItems:'center', justifyContent:'center', borderWidth:1.5, borderColor:'#ff4d82' },
+  convoName:         { fontSize:17, fontWeight:'700', color:'#fff' },
+  wingmanBtn:     { backgroundColor:'rgba(255,77,130,0.15)', borderRadius:50, paddingHorizontal:14, paddingVertical:7, borderWidth:1, borderColor:'rgba(255,77,130,0.3)' },
+  wingmanBtnTxt:  { fontSize:13, color:'#ff4d82', fontWeight:'700' },
+  messagesList:   { padding:16, paddingBottom:20, flexGrow:1 },
+  convoEmpty:     { alignItems:'center', marginTop:100, gap:8 },
+  convoEmptyTxt:  { fontSize:16, color:'rgba(255,255,255,0.48)', fontWeight:'600' },
+  convoEmptySub:  { fontSize:13, color:'rgba(255,255,255,0.3)' },
+  bubble:         { maxWidth:'75%', borderRadius:18, paddingHorizontal:14, paddingVertical:10, marginBottom:8 },
+  bubbleMe:       { alignSelf:'flex-end', backgroundColor:'#ff4d82' },
+  bubbleThem:     { alignSelf:'flex-start', backgroundColor:'rgba(255,255,255,0.11)', borderWidth:1, borderColor:'rgba(255,255,255,0.13)' },
+  bubbleTxt:      { fontSize:14, lineHeight:20 },
+  bubbleTxtMe:    { color:'#fff' },
+  bubbleTxtThem:  { color:'rgba(255,255,255,0.9)' },
+  inputRow:       { flexDirection:'row', alignItems:'flex-end', gap:10, padding:12, paddingBottom:34, borderTopWidth:1, borderTopColor:'rgba(255,255,255,0.1)', backgroundColor:'rgba(10,0,5,0.85)' },
+  input:          { flex:1, backgroundColor:'rgba(255,255,255,0.09)', borderRadius:20, paddingHorizontal:16, paddingVertical:10, fontSize:14, color:'#fff', borderWidth:1, borderColor:'rgba(255,255,255,0.13)', maxHeight:100 },
+  sendBtn:        { width:42, height:42, borderRadius:21, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center' },
+  modalOverlay:   { flex:1, backgroundColor:'rgba(0,0,0,0.9)', justifyContent:'flex-end' },
+  modalCard:      { backgroundColor:'#1e0012', borderRadius:24, padding:22, borderWidth:1, borderColor:'rgba(255,255,255,0.12)' },
+  modalHeader:    { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:6 },
+  modalTitle:     { fontSize:18, fontWeight:'700', color:'#fff' },
+  modalSub:       { fontSize:12, color:'rgba(255,255,255,0.42)', marginBottom:16 },
+  linePill:       { flexDirection:'row', alignItems:'center', justifyContent:'space-between', backgroundColor:'rgba(255,77,130,0.08)', borderRadius:14, padding:14, marginBottom:10, borderWidth:1, borderColor:'rgba(255,77,130,0.2)' },
+  lineTxt:        { fontSize:14, color:'#fff', flex:1, marginRight:10, lineHeight:20 },
+
+  // Profile modal
+  profileOverlay:      { flex:1, backgroundColor:'#0a0005' },
+  profileClose:        { position:'absolute', top:52, right:18, zIndex:20 },
+  profileScroll:       { flexGrow:1 },
+  profileHero:         { width:'100%', height:420, overflow:'hidden', backgroundColor:'#1a000d' },
+  profileHeroEmpty:    { flex:1, alignItems:'center', justifyContent:'center' },
+  profileNameRow:      { flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start', paddingHorizontal:20, marginTop:16, marginBottom:8 },
+  profileName:         { fontSize:26, fontWeight:'700', color:'#fff', letterSpacing:0.3 },
+  profileTierPill:     { borderRadius:50, borderWidth:1, paddingHorizontal:12, paddingVertical:6, alignSelf:'flex-start', marginTop:4 },
+  profileTierTxt:      { fontSize:12, fontWeight:'700' },
+  profileBio:          { fontSize:14, color:'rgba(255,255,255,0.5)', fontStyle:'italic', paddingHorizontal:20, marginBottom:16, lineHeight:22 },
+  profileSectionLabel: { fontSize:11, color:'rgba(255,255,255,0.28)', textTransform:'uppercase', letterSpacing:1.2, paddingHorizontal:20, marginBottom:10, marginTop:6 },
+  photoRowContent:     { paddingHorizontal:20, gap:10, paddingBottom:4 },
+  profilePhotoThumb:   { width: SCREEN_W * 0.38, height: SCREEN_W * 0.5, borderRadius:14, backgroundColor:'rgba(255,255,255,0.06)', marginBottom:6 },
+  profilePillsRow:     { flexDirection:'row', flexWrap:'wrap', gap:8, paddingHorizontal:20, marginBottom:16 },
+  profileInterestPill: { paddingHorizontal:13, paddingVertical:7, borderRadius:50, borderWidth:1, borderColor:'rgba(255,77,130,0.45)', backgroundColor:'rgba(255,77,130,0.1)' },
+  profileInterestTxt:  { fontSize:13, color:'#ff4d82', fontWeight:'600' },
+  profileTagsGrid:     { flexDirection:'row', flexWrap:'wrap', gap:8, paddingHorizontal:20, marginBottom:16 },
+  profileTag:          { paddingHorizontal:13, paddingVertical:7, borderRadius:10, backgroundColor:'rgba(255,255,255,0.07)', borderWidth:1, borderColor:'rgba(255,255,255,0.12)' },
+  profileTagTxt:       { fontSize:13, color:'rgba(255,255,255,0.75)' },
 });

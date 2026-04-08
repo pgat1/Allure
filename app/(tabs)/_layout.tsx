@@ -2,9 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { Animated, StyleSheet } from 'react-native';
+import { Animated, StyleSheet, Text, View } from 'react-native';
+import { formatBadge, useBadgeCounts } from '@/app/lib/badgeCounts';
 
-function TabIcon({ name, focused }: { name: any, focused: boolean }) {
+function TabIcon({ name, focused, badge }: { name: any; focused: boolean; badge?: string }) {
   const scale = React.useRef(new Animated.Value(1)).current;
 
   React.useEffect(() => {
@@ -18,16 +19,25 @@ function TabIcon({ name, focused }: { name: any, focused: boolean }) {
 
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
-      <Ionicons
-        name={name}
-        size={20}
-        color={focused ? '#fff' : 'rgba(255,255,255,0.5)'}
-      />
+      <View>
+        <Ionicons
+          name={name}
+          size={20}
+          color={focused ? '#fff' : 'rgba(255,255,255,0.5)'}
+        />
+        {badge !== undefined && (
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{badge}</Text>
+          </View>
+        )}
+      </View>
     </Animated.View>
   );
 }
 
 export default function TabLayout() {
+  const counts = useBadgeCounts();
+
   return (
     <Tabs
       screenOptions={{
@@ -38,7 +48,7 @@ export default function TabLayout() {
         tabBarLabelStyle: styles.tabLabel,
         tabBarBackground: () => (
           <LinearGradient
-            colors={['#ff4d82', '#ff4d82']}
+            colors={['rgba(255,77,130,0.35)', 'rgba(255,77,130,0.35)']}
             start={{ x:0, y:0 }}
             end={{ x:0, y:1 }}
             style={[StyleSheet.absoluteFillObject, styles.gradientBg]}
@@ -63,7 +73,11 @@ export default function TabLayout() {
         options={{
           title: 'Likes',
           tabBarIcon: ({ focused }) => (
-            <TabIcon name={focused ? 'heart' : 'heart-outline'} focused={focused} />
+            <TabIcon
+              name={focused ? 'heart' : 'heart-outline'}
+              focused={focused}
+              badge={formatBadge(counts.likes)}
+            />
           ),
         }}
       />
@@ -72,7 +86,11 @@ export default function TabLayout() {
         options={{
           title: 'Chat',
           tabBarIcon: ({ focused }) => (
-            <TabIcon name={focused ? 'chatbubble' : 'chatbubble-outline'} focused={focused} />
+            <TabIcon
+              name={focused ? 'chatbubble' : 'chatbubble-outline'}
+              focused={focused}
+              badge={formatBadge(counts.messages)}
+            />
           ),
         }}
       />
@@ -115,5 +133,23 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     textTransform: 'uppercase',
     marginBottom: 4,
+  },
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -8,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#ff4d82',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '700',
+    lineHeight: 11,
   },
 });

@@ -1,4 +1,5 @@
 import { supabase } from '@/app/lib/supabase';
+import { Toast, useToast } from '@/app/lib/Toast';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
@@ -9,16 +10,17 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
-  Image, Modal,
+  Image,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 
-const { width } = Dimensions.get('window');
+const { width, height: windowHeight } = Dimensions.get('window');
 
 const INTEREST_CATEGORIES = [
   { emoji:'🏋️', label:'Gym' },
@@ -77,23 +79,27 @@ const KNOW_ME_FIELDS = [
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const [profile, setProfile]                 = useState<any>(null);
-  const [loading, setLoading]                 = useState(true);
-  const [editing, setEditing]                 = useState(false);
-  const [bio, setBio]                         = useState('');
-  const [saving, setSaving]                   = useState(false);
-  const [uploading, setUploading]             = useState(false);
-  const [photos, setPhotos]                   = useState<string[]>([]);
-  const [interests, setInterests]             = useState<any[]>([]);
-  const [knowMe, setKnowMe]                   = useState<any>({});
-  const [photoModal, setPhotoModal]           = useState(false);
-  const [interestModal, setInterestModal]     = useState(false);
-  const [knowMeModal, setKnowMeModal]         = useState(false);
-  const [editingInterest, setEditingInterest] = useState<number | null>(null);
+  const { showToast, toastJSX } = useToast();
+  const [profile, setProfile]                   = useState<any>(null);
+  const [loading, setLoading]                   = useState(true);
+  const [bio, setBio]                           = useState('');
+  const [profilePicture, setProfilePicture]     = useState<string | null>(null);
+  const [uploadingProfilePic, setUploadingProfilePic] = useState(false);
+  const [uploading, setUploading]               = useState(false);
+  const [photos, setPhotos]                     = useState<string[]>([]);
+  const [interests, setInterests]               = useState<any[]>([]);
+  const [knowMe, setKnowMe]                     = useState<any>({});
+  const [editProfileModal, setEditProfileModal] = useState(false);
+  const [editName, setEditName]                 = useState('');
+  const [editBirthday, setEditBirthday]         = useState('');
+  const [editBio, setEditBio]                   = useState('');
+  const [editSaving, setEditSaving]             = useState(false);
+  const [aboutMeModal, setAboutMeModal]         = useState(false);
+  const [aboutMeTab, setAboutMeTab]             = useState<'interests' | 'knowme'>('interests');
+  const [editingInterest, setEditingInterest]   = useState<number>(0);
   const [selectedCategory, setSelectedCategory] = useState<any>(null);
-  const [interestDesc, setInterestDesc]       = useState('');
-  const [editingField, setEditingField]       = useState<any>(null);
-  const [fieldValue, setFieldValue]           = useState('');
+  const [interestDesc, setInterestDesc]         = useState('');
+  const [picPickerModal, setPicPickerModal]     = useState(false);
 
   useEffect(() => { loadProfile(); }, []);
 
@@ -109,8 +115,14 @@ export default function ProfileScreen() {
         setProfile(data);
         setBio(data.bio || '');
         setInterests(data.interests || []);
-        setPhotos(Array.isArray(data.photo_urls) ? data.photo_urls : []);
+        const loadedPhotos = Array.isArray(data.photo_urls) ? data.photo_urls : [];
+        setPhotos(loadedPhotos);
+        setProfilePicture(data.profile_picture || null);
         setKnowMe(data.get_to_know_me || {});
+        const validCount = loadedPhotos.filter((p: string) => p).length;
+        if (validCount < 4) {
+          showToast('📸', 'More Photos Needed', 'You need at least 4 photos to use Allure.');
+        }
       }
     } catch (err) {
       console.log('Load error:', err);
@@ -122,6 +134,11 @@ export default function ProfileScreen() {
   async function uploadPhoto(index: number, uri?: string) {
     let photoUri = uri;
     if (!photoUri) {
+      const { status: libraryStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (libraryStatus !== 'granted') {
+        showToast('❌', 'Permission needed', 'Please allow photo access in Settings');
+        return;
+      }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'], allowsEditing: true, aspect: [3, 4], quality: 0.8,
       });
@@ -145,29 +162,95 @@ export default function ProfileScreen() {
       await supabase.from('profiles')
         .update({ photo_urls: newPhotos.filter(p => p) })
         .eq('id', userData.user.id);
-      Alert.alert('Photo uploaded! ✨');
+      showToast('✨', 'Photo uploaded!');
     } catch (err: any) {
-      Alert.alert('Upload failed', err.message);
+      showToast('❌', 'Upload failed', err.message);
     } finally {
       setUploading(false);
     }
   }
 
   async function takeSelfie(index: number) {
+    const { status: cameraStatus } = await ImagePicker.requestCameraPermissionsAsync();
+    if (cameraStatus !== 'granted') {
+      showToast('❌', 'Permission needed', 'Please allow camera access in Settings');
+      return;
+    }
     const result = await ImagePicker.launchCameraAsync({
       cameraType: ImagePicker.CameraType.front,
-      allowsEditing: true, aspect: [3, 4], quality: 0.8,
+      allowsEditing: false, exif: false, quality: 0.8,
     });
-    if (!result.canceled) await uploadPhoto(index, result.assets[0].uri);
+    if (!result.canceled && result.assets[0]) await uploadPhoto(index, result.assets[0].uri);
   }
 
-  function handleProfilePhotoPress() {
-    Alert.alert('Profile Photo', 'What would you like to do?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: '🤳 Take a Selfie', onPress: () => takeSelfie(0) },
-      { text: '🖼️ Choose from Library', onPress: () => uploadPhoto(0) },
-      { text: '👁️ Preview Photos', onPress: () => setPhotoModal(true) },
-    ]);
+  async function doUploadProfilePic(uri: string) {
+    setUploadingProfilePic(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData.user) return;
+      const fileName = `${userData.user.id}_profile_pic.jpg`;
+      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' as any });
+      const byteArray = Uint8Array.from(atob(base64).split('').map((c: string) => c.charCodeAt(0)));
+      const { error: uploadError } = await supabase.storage
+        .from('photos').upload(fileName, byteArray, { contentType: 'image/jpeg', upsert: true });
+      if (uploadError) throw uploadError;
+      const { data: urlData } = supabase.storage.from('photos').getPublicUrl(fileName);
+      setProfilePicture(urlData.publicUrl);
+      await supabase.from('profiles')
+        .update({ profile_picture: urlData.publicUrl })
+        .eq('id', userData.user.id);
+      showToast('✨', 'Profile picture updated!');
+    } catch (err: any) {
+      showToast('❌', 'Upload failed', err.message);
+    } finally {
+      setUploadingProfilePic(false);
+    }
+  }
+
+  function handleProfilePictureChange() {
+    setPicPickerModal(true);
+  }
+
+  async function handleTakePhoto() {
+    setPicPickerModal(false);
+    setTimeout(async () => {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        showToast('❌', 'Permission needed', 'Please allow camera access in Settings');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        cameraType: ImagePicker.CameraType.front,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]) await doUploadProfilePic(result.assets[0].uri);
+    }, 400);
+  }
+
+  async function handleChooseFromLibrary() {
+    setPicPickerModal(false);
+    setTimeout(async () => {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        showToast('❌', 'Permission needed', 'Please allow photo access in Settings');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]) await doUploadProfilePic(result.assets[0].uri);
+    }, 400);
+  }
+
+  function openEditProfile() {
+    setEditName(profile?.name || '');
+    setEditBirthday(profile?.birthday || '');
+    setEditBio(bio);
+    setEditProfileModal(true);
   }
 
   async function removePhoto(index: number) {
@@ -189,43 +272,78 @@ export default function ProfileScreen() {
       setSelectedCategory(null);
       setInterestDesc('');
     }
-    setInterestModal(true);
   }
 
   async function saveInterest() {
-    if (!selectedCategory) { Alert.alert('Please select a category'); return; }
+    if (!selectedCategory) { showToast('⚠️', 'Pick a category first'); return; }
     const newInterests = [...interests];
-    newInterests[editingInterest!] = {
+    newInterests[editingInterest] = {
       emoji: selectedCategory.emoji,
       label: selectedCategory.label,
       desc: interestDesc.trim(),
     };
     setInterests(newInterests);
-    setInterestModal(false);
     const { data: userData } = await supabase.auth.getUser();
     if (!userData.user) return;
     await supabase.from('profiles').update({ interests: newInterests }).eq('id', userData.user.id);
+    showToast('✅', 'Interest saved!');
   }
 
   async function saveKnowMeField(key: string, value: string) {
     const newKnowMe = { ...knowMe, [key]: value };
     setKnowMe(newKnowMe);
-    setEditingField(null);
-    setFieldValue('');
     const { data: userData } = await supabase.auth.getUser();
     if (!userData.user) return;
     await supabase.from('profiles').update({ get_to_know_me: newKnowMe }).eq('id', userData.user.id);
   }
 
-  async function saveBio() {
-    setSaving(true);
-    const { data: userData } = await supabase.auth.getUser();
-    if (!userData.user) return;
-    await supabase.from('profiles').update({ bio }).eq('id', userData.user.id);
-    setProfile((prev: any) => ({ ...prev, bio }));
-    setEditing(false);
-    setSaving(false);
-    Alert.alert('Saved!');
+  function formatBirthday(text: string): string {
+    const cleaned = text.replace(/\D/g, '');
+    if (cleaned.length <= 2) return cleaned;
+    if (cleaned.length <= 4) return `${cleaned.slice(0,2)}/${cleaned.slice(2)}`;
+    return `${cleaned.slice(0,2)}/${cleaned.slice(2,4)}/${cleaned.slice(4,8)}`;
+  }
+
+  function calculateAge(birthdayStr: string): number {
+    const today = new Date();
+    const birth = new Date(birthdayStr);
+    let age = today.getFullYear() - birth.getFullYear();
+    const m = today.getMonth() - birth.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
+    return age;
+  }
+
+  async function saveEditProfile() {
+    if (!editName.trim()) { showToast('⚠️', 'Name required', 'Please enter your name'); return; }
+    setEditSaving(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData.user) return;
+      const updates: any = { name: editName.trim(), bio: editBio };
+      if (editBirthday.length === 10) {
+        const isoDate = `${editBirthday.slice(6,10)}-${editBirthday.slice(0,2)}-${editBirthday.slice(3,5)}`;
+        updates.birthday = isoDate;
+        updates.age = calculateAge(isoDate);
+      }
+      await supabase.from('profiles').update(updates).eq('id', userData.user.id);
+      setBio(editBio);
+      setProfile((prev: any) => ({ ...prev, ...updates }));
+      setEditProfileModal(false);
+      showToast('✅', 'Profile saved!');
+    } catch (err: any) {
+      showToast('❌', 'Save failed', err.message);
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  function checkPhotoRequirement() {
+    const validCount = photos.filter(p => p).length;
+    if (validCount < 4) {
+      showToast('📸', 'More Photos Needed', 'You need at least 4 photos to use Allure.');
+      return false;
+    }
+    return true;
   }
 
   async function handleLogout() {
@@ -254,437 +372,446 @@ export default function ProfileScreen() {
 
   if (loading) return (
     <View style={s.container}>
+      <LinearGradient colors={['#2a0018','#150010','#0a0005']} style={StyleSheet.absoluteFillObject} />
       <ActivityIndicator color="#ff4d82" size="large" />
     </View>
   );
 
   const tierColor   = getTierColor(profile?.tier || 'Bloom');
   const tierEmoji   = getTierEmoji(profile?.tier || 'Bloom');
-  const intentIcon  = profile?.intent === 'hookup' ? '🔥' : '💞';
   const validPhotos = photos.filter(p => p);
   const knowMeCount = Object.keys(knowMe).filter(k => knowMe[k]).length;
 
   return (
     <View style={s.container}>
-      <LinearGradient
-        colors={['#1a0010', '#0d0008', '#000']}
-        start={{ x:0.5, y:0 }}
-        end={{ x:0.5, y:1 }}
-        style={StyleSheet.absoluteFillObject}
-      />
-
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+        <View style={s.pageWrap}>
 
-        {/* Allure logo */}
-        <View style={s.topBar}>
-          <Text style={s.logo}>Allure</Text>
-          <View style={s.logoLine} />
-        </View>
+        {/* TOP PHOTO BANNER */}
+        <View style={s.banner}>
+          {profilePicture ? (
+            <Image source={{ uri: profilePicture }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+          ) : (
+            <LinearGradient colors={['#3a0025', '#1a000f']} style={StyleSheet.absoluteFillObject} />
+          )}
+          {/* Dark gradient overlay */}
+          <LinearGradient
+            colors={['transparent', '#07000c']}
+            style={StyleSheet.absoluteFillObject}
+          />
 
-        {/* Profile circle + necklace */}
-        <View style={s.avatarSection}>
-          <View style={s.avatarWrap}>
-            <TouchableOpacity
-              style={[s.avatarRing, { borderColor: tierColor }]}
-              onPress={handleProfilePhotoPress}
-            >
-              {validPhotos[0] ? (
-                <Image source={{ uri: validPhotos[0] }} style={s.avatarImg} />
-              ) : (
-                <View style={s.avatarEmpty}>
-                  <Ionicons name="person" size={36} color="rgba(255,255,255,0.2)" />
-                </View>
-              )}
-            </TouchableOpacity>
+          {/* Allure wordmark */}
+          <Text style={s.bannerWordmark}>Allure</Text>
 
-            <TouchableOpacity style={s.plusBtn} onPress={handleProfilePhotoPress}>
-              <Ionicons name="add" size={16} color="#fff" />
-            </TouchableOpacity>
+          {/* Camera badge */}
+          <TouchableOpacity style={s.cameraBadge} onPress={handleProfilePictureChange} activeOpacity={0.8}>
+            {uploadingProfilePic
+              ? <ActivityIndicator size="small" color="#fff" />
+              : <Ionicons name="camera" size={14} color="#fff" />
+            }
+          </TouchableOpacity>
 
-            <View style={[s.necklace, s.necklaceLeft, { borderColor: tierColor }]}>
-              <Text style={[s.necklaceScore, { color: tierColor }]}>{profile?.score || 0}</Text>
-            </View>
-            <View style={[s.necklace, s.necklaceMiddle, { borderColor: tierColor }]}>
-              <Text style={s.necklaceIcon}>{intentIcon}</Text>
-            </View>
-            <View style={[s.necklace, s.necklaceRight, { borderColor: tierColor }]}>
-              <Text style={s.necklaceIcon}>{tierEmoji}</Text>
-            </View>
-          </View>
-
-          <Text style={s.name}>{profile?.name || 'Your Name'}</Text>
-          <Text style={s.age}>{profile?.age ? `${profile.age} years old` : ''}</Text>
-        </View>
-
-        {/* Bio */}
-        <View style={s.card}>
-          <View style={s.cardHeader}>
-            <Text style={s.cardLabel}>Bio</Text>
-            <TouchableOpacity onPress={() => setEditing(!editing)}>
-              <Text style={s.editBtn}>{editing ? 'Cancel' : 'Edit'}</Text>
-            </TouchableOpacity>
-          </View>
-          {editing ? (
+          {/* Bottom info row */}
+          <View style={s.bannerBottom}>
             <View>
+              <Text style={s.bannerName}>{profile?.name || 'Your Name'}</Text>
+              {profile?.age ? <Text style={s.bannerAge}>{profile.age} years old</Text> : null}
+            </View>
+            <View style={s.bannerTierPill}>
+              <Text style={s.bannerTierTxt}>{tierEmoji} {profile?.score || 0}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* BELOW BANNER */}
+        <View style={s.below}>
+
+          {bio ? <Text style={s.bio}>{bio}</Text> : null}
+
+          {interests.length > 0 && (
+            <View style={s.pillsRow}>
+              {interests.slice(0, 3).map((int, i) => (
+                <View key={i} style={s.interestPill}>
+                  <Text style={s.interestPillTxt}>{int.emoji} {int.label}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          <View style={s.divider} />
+
+          {/* Edit Profile */}
+          <TouchableOpacity style={s.listRow} onPress={openEditProfile}>
+            <Text style={s.listRowTxt}>Edit Profile</Text>
+            <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
+          </TouchableOpacity>
+          <View style={s.rowDivider} />
+
+          {/* About Me */}
+          <TouchableOpacity style={s.listRow} onPress={() => { setAboutMeTab('interests'); setAboutMeModal(true); }}>
+            <Text style={s.listRowTxt}>About Me</Text>
+            <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
+          </TouchableOpacity>
+          <View style={s.rowDivider} />
+
+          {/* Rescan My Face */}
+          <TouchableOpacity style={s.listRow} onPress={() => router.push('/facescan')}>
+            <Text style={s.listRowTxt}>Rescan My Face</Text>
+            <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
+          </TouchableOpacity>
+
+          <View style={s.divider} />
+
+          {/* Upgrade */}
+          <TouchableOpacity style={s.upgradeBtn} onPress={() => {}}>
+            <Text style={s.upgradeTxt}>⭐ Upgrade to Gold</Text>
+          </TouchableOpacity>
+
+          {/* Log Out */}
+          <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
+            <Text style={s.logoutTxt}>Log Out</Text>
+          </TouchableOpacity>
+
+        </View>
+
+        </View>{/* end pageWrap */}
+      </ScrollView>
+
+      {/* Profile Picture Picker Modal */}
+      <Modal visible={picPickerModal} transparent animationType="fade">
+        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' }}>
+          <View style={{ backgroundColor: '#1a0010', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 40, paddingHorizontal: 20, paddingTop: 24 }}>
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontWeight: '600', textAlign: 'center', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 20 }}>Profile Photo</Text>
+            <TouchableOpacity onPress={handleTakePhoto} style={{ paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' }}>
+              <Text style={{ color: '#ff2d78', fontSize: 17, fontWeight: '600', textAlign: 'center' }}>Take a Photo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleChooseFromLibrary} style={{ paddingVertical: 16 }}>
+              <Text style={{ color: '#ff2d78', fontSize: 17, fontWeight: '600', textAlign: 'center' }}>Choose from Library</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setPicPickerModal(false)} style={{ marginTop: 8, paddingVertical: 14, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 12 }}>
+              <Text style={{ color: 'rgba(255,255,255,0.35)', fontSize: 16, fontWeight: '500', textAlign: 'center' }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit Profile Modal */}
+      <Modal visible={editProfileModal} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <View style={[s.modalCard, { maxHeight:'94%' }]}>
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>Edit Profile</Text>
+              <TouchableOpacity onPress={() => setEditProfileModal(false)}>
+                <Ionicons name="close-circle" size={26} color="rgba(255,255,255,0.4)" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+
+              <Text style={s.modalLabel}>Name</Text>
               <TextInput
-                style={s.bioInput}
-                value={bio}
-                onChangeText={setBio}
+                style={s.modalInput}
+                value={editName}
+                onChangeText={setEditName}
+                placeholder="Your full name"
+                placeholderTextColor="rgba(255,255,255,0.2)"
+                autoCapitalize="words"
+              />
+
+              <Text style={s.modalLabel}>Birthday</Text>
+              <TextInput
+                style={s.modalInput}
+                value={editBirthday.length === 10
+                  ? `${editBirthday.slice(5,7)}/${editBirthday.slice(8,10)}/${editBirthday.slice(0,4)}`
+                  : editBirthday}
+                onChangeText={t => {
+                  const fmt = formatBirthday(t);
+                  if (fmt.length === 10) {
+                    setEditBirthday(`${fmt.slice(6,10)}-${fmt.slice(0,2)}-${fmt.slice(3,5)}`);
+                  } else {
+                    setEditBirthday(fmt);
+                  }
+                }}
+                placeholder="MM/DD/YYYY"
+                placeholderTextColor="rgba(255,255,255,0.2)"
+                keyboardType="numeric"
+                maxLength={10}
+              />
+
+              <Text style={s.modalLabel}>Bio</Text>
+              <TextInput
+                style={[s.modalInput, { minHeight:80, textAlignVertical:'top' }]}
+                value={editBio}
+                onChangeText={setEditBio}
                 placeholder="Write something about yourself..."
                 placeholderTextColor="rgba(255,255,255,0.2)"
                 multiline
                 maxLength={150}
               />
-              <Text style={s.charCount}>{bio.length}/150</Text>
-              <TouchableOpacity
-                style={[s.saveBtn, saving && { opacity:0.6 }]}
-                onPress={saveBio}
-                disabled={saving}
-              >
-                {saving ? <ActivityIndicator color="#fff" /> : <Text style={s.saveBtnTxt}>Save</Text>}
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <Text style={s.bioText}>{profile?.bio || 'No bio yet — tap Edit to add one!'}</Text>
-          )}
-        </View>
+              <Text style={s.charCount}>{editBio.length}/150</Text>
 
-        {/* Edit Photos */}
-        <TouchableOpacity style={s.editRow} onPress={() => setPhotoModal(true)}>
-          <View style={s.editRowLeft}>
-            <View style={s.editRowIcon}>
-              <Ionicons name="images-outline" size={16} color="#ff4d82" />
-            </View>
-            <Text style={s.editRowTxt}>Edit Photos</Text>
-            <Text style={s.editRowCount}>{validPhotos.length}/8</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.2)" />
-        </TouchableOpacity>
-
-        {/* Edit Interests */}
-        <TouchableOpacity style={s.editRow} onPress={() => openInterestEdit(0)}>
-          <View style={s.editRowLeft}>
-            <View style={s.editRowIcon}>
-              <Ionicons name="star-outline" size={16} color="#ff4d82" />
-            </View>
-            <Text style={s.editRowTxt}>Edit Interests</Text>
-            <Text style={s.editRowCount}>{interests.length}/5</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.2)" />
-        </TouchableOpacity>
-
-        {/* Get to Know Me */}
-        <TouchableOpacity style={s.editRow} onPress={() => setKnowMeModal(true)}>
-          <View style={s.editRowLeft}>
-            <View style={s.editRowIcon}>
-              <Ionicons name="person-circle-outline" size={16} color="#ff4d82" />
-            </View>
-            <Text style={s.editRowTxt}>Get to Know Me</Text>
-            <Text style={s.editRowCount}>{knowMeCount} filled</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.2)" />
-        </TouchableOpacity>
-
-        {/* Preview filled Know Me */}
-        {knowMeCount > 0 && (
-          <View style={s.card}>
-            <Text style={s.cardLabel}>About Me</Text>
-            <View style={s.knowMePreview}>
-              {KNOW_ME_FIELDS.filter(f => knowMe[f.key]).slice(0, 6).map(f => (
-                <View key={f.key} style={s.knowMeTag}>
-                  <Text style={s.knowMeTagEmoji}>{f.emoji}</Text>
-                  <Text style={s.knowMeTagTxt}>{knowMe[f.key]}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Stats */}
-        <View style={s.statsRow}>
-          {[{ n:0, l:'Matches' }, { n:0, l:'Likes' }, { n:0, l:'Messages' }].map(stat => (
-            <View key={stat.l} style={s.statCard}>
-              <Text style={[s.statNum, { color: tierColor }]}>{stat.n}</Text>
-              <Text style={s.statLabel}>{stat.l}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Settings */}
-        <View style={s.card}>
-          <Text style={s.cardLabel}>Settings</Text>
-          {[
-            { label:'Rescan My Face',    icon:'scan-outline',          action: () => router.push('/facescan') },
-            { label:'Notifications',     icon:'notifications-outline', action: () => {} },
-            { label:'Privacy',           icon:'lock-closed-outline',   action: () => {} },
-            { label:'Upgrade to Gold ⭐', icon:'star-outline',          action: () => {} },
-          ].map((item, idx) => (
-            <TouchableOpacity
-              key={item.label}
-              style={[s.settingsRow, idx === 3 && { borderBottomWidth:0 }]}
-              onPress={item.action}
-            >
-              <View style={s.settingsLeft}>
-                <Ionicons name={item.icon as any} size={16} color="rgba(255,255,255,0.35)" />
-                <Text style={s.settingsLabel}>{item.label}</Text>
+              <Text style={[s.modalLabel, { marginTop:16 }]}>Photos</Text>
+              <Text style={s.modalSub}>Tap to add · Long press to remove · Up to 8 photos</Text>
+              <View style={s.photoGrid}>
+                {[0,1,2,3,4,5,6,7].map(i => (
+                  <TouchableOpacity
+                    key={i}
+                    style={s.photoSlot}
+                    onPress={() => Alert.alert('Add Photo', '', [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: '🤳 Take Selfie', onPress: () => takeSelfie(i) },
+                      { text: '🖼️ Choose from Library', onPress: () => uploadPhoto(i) },
+                    ])}
+                    onLongPress={() => photos[i] && Alert.alert('Remove?', '', [
+                      { text:'Cancel', style:'cancel' },
+                      { text:'Remove', style:'destructive', onPress:() => removePhoto(i) },
+                    ])}
+                  >
+                    {photos[i] ? (
+                      <Image source={{ uri: photos[i] }} style={s.photoImg} resizeMode="cover" />
+                    ) : (
+                      <View style={s.photoEmpty}>
+                        <Ionicons name="add" size={20} color="rgba(255,255,255,0.15)" />
+                      </View>
+                    )}
+                    {i === 0 && photos[0] && (
+                      <View style={s.mainBadge}><Text style={s.mainBadgeTxt}>Main</Text></View>
+                    )}
+                  </TouchableOpacity>
+                ))}
               </View>
-              <Ionicons name="chevron-forward" size={14} color="rgba(255,255,255,0.15)" />
-            </TouchableOpacity>
-          ))}
+              {uploading && (
+                <View style={s.uploadRow}>
+                  <ActivityIndicator color="#ff4d82" size="small" />
+                  <Text style={s.uploadTxt}>Uploading...</Text>
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={[s.saveBtn, editSaving && { opacity:0.6 }]}
+                onPress={saveEditProfile}
+                disabled={editSaving}
+              >
+                {editSaving
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={s.saveBtnTxt}>Save Profile</Text>
+                }
+              </TouchableOpacity>
+              <View style={{ height: 20 }} />
+            </ScrollView>
+          </View>
         </View>
+      </Modal>
 
-        <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
-          <Text style={s.logoutTxt}>Log Out</Text>
-        </TouchableOpacity>
-        <Text style={s.version}>Allure v1.0.0</Text>
-
-      </ScrollView>
-
-      {/* Photo Manager Modal */}
-      <Modal visible={photoModal} transparent animationType="slide">
+      {/* About Me Modal (Interests + Get to Know Me tabs) */}
+      <Modal visible={aboutMeModal} transparent animationType="slide">
         <View style={s.modalOverlay}>
-          <View style={s.modalCard}>
+          <View style={[s.modalCard, { maxHeight:'94%' }]}>
             <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>My Photos</Text>
-              <TouchableOpacity onPress={() => setPhotoModal(false)}>
+              <Text style={s.modalTitle}>About Me</Text>
+              <TouchableOpacity onPress={() => setAboutMeModal(false)}>
                 <Ionicons name="close-circle" size={26} color="rgba(255,255,255,0.4)" />
               </TouchableOpacity>
             </View>
-            <Text style={s.modalSub}>Tap to add · Long press to remove · Up to 8 photos</Text>
-            <View style={s.photoGrid}>
-              {[0,1,2,3,4,5,6,7].map(i => (
-                <TouchableOpacity
-                  key={i}
-                  style={s.photoSlot}
-                  onPress={() => Alert.alert('Add Photo', '', [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: '🤳 Take Selfie', onPress: () => takeSelfie(i) },
-                    { text: '🖼️ Choose from Library', onPress: () => uploadPhoto(i) },
-                  ])}
-                  onLongPress={() => photos[i] && Alert.alert('Remove?', '', [
-                    { text:'Cancel', style:'cancel' },
-                    { text:'Remove', style:'destructive', onPress:() => removePhoto(i) }
-                  ])}
-                >
-                  {photos[i] ? (
-                    <Image source={{ uri: photos[i] }} style={s.photoImg} resizeMode="cover" />
-                  ) : (
-                    <View style={s.photoEmpty}>
-                      <Ionicons name="add" size={20} color="rgba(255,255,255,0.15)" />
-                    </View>
-                  )}
-                  {i === 0 && photos[0] && (
-                    <View style={s.mainBadge}><Text style={s.mainBadgeTxt}>Main</Text></View>
-                  )}
-                </TouchableOpacity>
-              ))}
+
+            {/* Tabs */}
+            <View style={s.tabRow}>
+              <TouchableOpacity
+                style={[s.tabBtn, aboutMeTab === 'interests' && s.tabBtnActive]}
+                onPress={() => setAboutMeTab('interests')}
+              >
+                <Text style={[s.tabBtnTxt, aboutMeTab === 'interests' && s.tabBtnTxtActive]}>Interests</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.tabBtn, aboutMeTab === 'knowme' && s.tabBtnActive]}
+                onPress={() => setAboutMeTab('knowme')}
+              >
+                <Text style={[s.tabBtnTxt, aboutMeTab === 'knowme' && s.tabBtnTxtActive]}>Get to Know Me</Text>
+              </TouchableOpacity>
             </View>
-            {uploading && (
-              <View style={s.uploadRow}>
-                <ActivityIndicator color="#ff4d82" size="small" />
-                <Text style={s.uploadTxt}>Uploading...</Text>
-              </View>
+
+            {/* Interests tab */}
+            {aboutMeTab === 'interests' && (
+              <>
+                <Text style={s.modalSub}>Up to 5 interests shown on your profile</Text>
+                <View style={s.currentInterests}>
+                  {[0,1,2,3,4].map(i => (
+                    <TouchableOpacity
+                      key={i}
+                      style={[s.interestSlot, interests[i] && { borderColor:'rgba(255,77,130,0.4)', backgroundColor:'rgba(255,77,130,0.08)' }]}
+                      onPress={() => openInterestEdit(i)}
+                    >
+                      {interests[i]
+                        ? <Text style={s.interestSlotTxt}>{interests[i].emoji} {interests[i].label}</Text>
+                        : <Text style={s.interestSlotEmpty}>+ Add</Text>
+                      }
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={s.modalLabel}>Pick a category</Text>
+                <ScrollView style={s.categoryScroll} showsVerticalScrollIndicator={false}>
+                  <View style={s.categoryGrid}>
+                    {INTEREST_CATEGORIES.map(cat => (
+                      <TouchableOpacity
+                        key={cat.label}
+                        style={[s.categoryPill, selectedCategory?.label === cat.label && s.categoryPillSelected]}
+                        onPress={() => setSelectedCategory(cat)}
+                      >
+                        <Text style={s.categoryEmoji}>{cat.emoji}</Text>
+                        <Text style={[s.categoryLabel, selectedCategory?.label === cat.label && s.categoryLabelSelected]}>
+                          {cat.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+                <TextInput
+                  style={s.modalInput}
+                  placeholder="Add your own description (optional)"
+                  placeholderTextColor="rgba(255,255,255,0.2)"
+                  value={interestDesc}
+                  onChangeText={setInterestDesc}
+                  maxLength={60}
+                />
+                <TouchableOpacity style={s.saveBtn} onPress={saveInterest}>
+                  <Text style={s.saveBtnTxt}>Save Interest</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {/* Get to Know Me tab */}
+            {aboutMeTab === 'knowme' && (
+              <>
+                <Text style={s.modalSub}>Fill out what you're comfortable sharing</Text>
+                <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight:'80%' }}>
+                  {KNOW_ME_FIELDS.map(field => (
+                    <View key={field.key} style={s.knowMeField}>
+                      <View style={s.knowMeFieldLeft}>
+                        <Text style={s.knowMeFieldEmoji}>{field.emoji}</Text>
+                        <Text style={s.knowMeFieldLabel}>{field.label}</Text>
+                      </View>
+                      {field.type === 'text' ? (
+                        <TextInput
+                          style={s.knowMeInput}
+                          placeholder={field.placeholder}
+                          placeholderTextColor="rgba(255,255,255,0.15)"
+                          value={knowMe[field.key] || ''}
+                          onChangeText={v => setKnowMe({ ...knowMe, [field.key]: v })}
+                          onBlur={() => saveKnowMeField(field.key, knowMe[field.key] || '')}
+                        />
+                      ) : (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.optionsScroll}>
+                          <View style={s.optionsRow}>
+                            {field.options?.map(opt => (
+                              <TouchableOpacity
+                                key={opt}
+                                style={[s.optionPill, knowMe[field.key] === opt && s.optionPillSelected]}
+                                onPress={() => saveKnowMeField(field.key, opt)}
+                              >
+                                <Text style={[s.optionPillTxt, knowMe[field.key] === opt && s.optionPillTxtSelected]}>
+                                  {opt}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        </ScrollView>
+                      )}
+                    </View>
+                  ))}
+                </ScrollView>
+              </>
             )}
           </View>
         </View>
       </Modal>
 
-      {/* Interest Modal */}
-      <Modal visible={interestModal} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={s.modalCard}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>My Interests</Text>
-              <TouchableOpacity onPress={() => setInterestModal(false)}>
-                <Ionicons name="close-circle" size={26} color="rgba(255,255,255,0.4)" />
-              </TouchableOpacity>
-            </View>
-            <Text style={s.modalSub}>Up to 5 interests shown on your profile</Text>
-            <View style={s.currentInterests}>
-              {[0,1,2,3,4].map(i => (
-                <TouchableOpacity
-                  key={i}
-                  style={[s.interestSlot, interests[i] && { borderColor:'rgba(255,77,130,0.4)', backgroundColor:'rgba(255,77,130,0.08)' }]}
-                  onPress={() => openInterestEdit(i)}
-                >
-                  {interests[i] ? (
-                    <Text style={s.interestSlotTxt}>{interests[i].emoji} {interests[i].label}</Text>
-                  ) : (
-                    <Text style={s.interestSlotEmpty}>+ Add</Text>
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={s.modalLabel}>Pick a category</Text>
-            <ScrollView style={s.categoryScroll} showsVerticalScrollIndicator={false}>
-              <View style={s.categoryGrid}>
-                {INTEREST_CATEGORIES.map(cat => (
-                  <TouchableOpacity
-                    key={cat.label}
-                    style={[s.categoryPill, selectedCategory?.label === cat.label && s.categoryPillSelected]}
-                    onPress={() => setSelectedCategory(cat)}
-                  >
-                    <Text style={s.categoryEmoji}>{cat.emoji}</Text>
-                    <Text style={[s.categoryLabel, selectedCategory?.label === cat.label && s.categoryLabelSelected]}>
-                      {cat.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-            <TextInput
-              style={s.modalInput}
-              placeholder="Add your own description (optional)"
-              placeholderTextColor="rgba(255,255,255,0.2)"
-              value={interestDesc}
-              onChangeText={setInterestDesc}
-              maxLength={60}
-            />
-            <TouchableOpacity style={s.saveBtn} onPress={saveInterest}>
-              <Text style={s.saveBtnTxt}>Save Interest</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
-      {/* Get to Know Me Modal */}
-      <Modal visible={knowMeModal} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={s.modalCard}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>Get to Know Me</Text>
-              <TouchableOpacity onPress={() => setKnowMeModal(false)}>
-                <Ionicons name="close-circle" size={26} color="rgba(255,255,255,0.4)" />
-              </TouchableOpacity>
-            </View>
-            <Text style={s.modalSub}>Fill out what you're comfortable sharing</Text>
-            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: '85%' }}>
-              {KNOW_ME_FIELDS.map(field => (
-                <View key={field.key} style={s.knowMeField}>
-                  <View style={s.knowMeFieldLeft}>
-                    <Text style={s.knowMeFieldEmoji}>{field.emoji}</Text>
-                    <Text style={s.knowMeFieldLabel}>{field.label}</Text>
-                  </View>
-                  {field.type === 'text' ? (
-                    <TextInput
-                      style={s.knowMeInput}
-                      placeholder={field.placeholder}
-                      placeholderTextColor="rgba(255,255,255,0.15)"
-                      value={knowMe[field.key] || ''}
-                      onChangeText={v => setKnowMe({ ...knowMe, [field.key]: v })}
-                      onBlur={() => saveKnowMeField(field.key, knowMe[field.key] || '')}
-                    />
-                  ) : (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.optionsScroll}>
-                      <View style={s.optionsRow}>
-                        {field.options?.map(opt => (
-                          <TouchableOpacity
-                            key={opt}
-                            style={[s.optionPill, knowMe[field.key] === opt && s.optionPillSelected]}
-                            onPress={() => saveKnowMeField(field.key, opt)}
-                          >
-                            <Text style={[s.optionPillTxt, knowMe[field.key] === opt && s.optionPillTxtSelected]}>
-                              {opt}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    </ScrollView>
-                  )}
-                </View>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
+      {toastJSX}
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  container:            { flex:1, backgroundColor:'#000' },
-  scroll:               { flexGrow:1, padding:20, paddingTop:54, paddingBottom:100 },
-  topBar:               { flexDirection:'row', alignItems:'center', gap:6, marginBottom:24 },
-  logo:                 { fontSize:18, fontWeight:'200', fontStyle:'italic', color:'#ff4d82', letterSpacing:4 },
-  logoLine:             { flex:1, height:0.5, backgroundColor:'rgba(255,77,130,0.3)', marginTop:3 },
-  avatarSection:        { alignItems:'center', marginBottom:24 },
-  avatarWrap:           { position:'relative', width:100, height:100, marginBottom:32 },
-  avatarRing:           { width:100, height:100, borderRadius:50, borderWidth:2, overflow:'hidden' },
-  avatarImg:            { width:'100%', height:'100%' },
-  avatarEmpty:          { flex:1, alignItems:'center', justifyContent:'center', backgroundColor:'rgba(255,255,255,0.04)' },
-  plusBtn:              { position:'absolute', top:-8, left:-8, backgroundColor:'#ff4d82', borderRadius:14, width:28, height:28, alignItems:'center', justifyContent:'center', borderWidth:2, borderColor:'#000', zIndex:10 },
-  necklace:             { position:'absolute', width:30, height:30, borderRadius:15, borderWidth:2, backgroundColor:'#000', alignItems:'center', justifyContent:'center', zIndex:10 },
-  necklaceLeft:         { bottom:-14, left:-18 },
-  necklaceMiddle:       { bottom:-22, left:'50%', marginLeft:-15 },
-  necklaceRight:        { bottom:-14, right:-18 },
-  necklaceScore:        { fontSize:9, fontWeight:'700' },
-  necklaceIcon:         { fontSize:12 },
-  name:                 { fontSize:26, fontWeight:'700', color:'#fff', letterSpacing:0.3, marginTop:4 },
-  age:                  { fontSize:14, color:'rgba(255,255,255,0.35)', marginTop:2 },
-  card:                 { backgroundColor:'rgba(255,255,255,0.04)', borderRadius:16, padding:16, marginBottom:10, borderWidth:1, borderColor:'rgba(255,255,255,0.07)' },
-  cardHeader:           { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:10 },
-  cardLabel:            { fontSize:11, fontWeight:'700', color:'rgba(255,255,255,0.35)', textTransform:'uppercase', letterSpacing:1.5, marginBottom:8 },
-  editBtn:              { fontSize:13, color:'#ff4d82', fontWeight:'600' },
-  bioInput:             { backgroundColor:'rgba(255,255,255,0.05)', borderRadius:10, borderWidth:1, borderColor:'rgba(255,255,255,0.08)', padding:12, fontSize:14, color:'#fff', minHeight:70, textAlignVertical:'top' },
-  charCount:            { fontSize:11, color:'rgba(255,255,255,0.2)', textAlign:'right', marginTop:4 },
-  saveBtn:              { backgroundColor:'#ff4d82', borderRadius:50, padding:12, alignItems:'center', marginTop:10 },
-  saveBtnTxt:           { color:'#fff', fontSize:14, fontWeight:'700' },
-  bioText:              { fontSize:14, color:'rgba(255,255,255,0.45)', lineHeight:20 },
-  editRow:              { flexDirection:'row', justifyContent:'space-between', alignItems:'center', backgroundColor:'rgba(255,255,255,0.04)', borderRadius:14, padding:14, marginBottom:10, borderWidth:1, borderColor:'rgba(255,77,130,0.1)' },
-  editRowLeft:          { flexDirection:'row', alignItems:'center', gap:10 },
-  editRowIcon:          { width:28, height:28, borderRadius:14, backgroundColor:'rgba(255,77,130,0.1)', alignItems:'center', justifyContent:'center', borderWidth:1, borderColor:'rgba(255,77,130,0.2)' },
-  editRowTxt:           { fontSize:14, color:'rgba(255,255,255,0.7)', fontWeight:'500' },
-  editRowCount:         { fontSize:12, color:'rgba(255,77,130,0.6)', marginLeft:4 },
-  knowMePreview:        { flexDirection:'row', flexWrap:'wrap', gap:8 },
-  knowMeTag:            { flexDirection:'row', alignItems:'center', gap:5, backgroundColor:'rgba(255,77,130,0.08)', borderRadius:20, paddingHorizontal:10, paddingVertical:6, borderWidth:1, borderColor:'rgba(255,77,130,0.15)' },
-  knowMeTagEmoji:       { fontSize:13 },
-  knowMeTagTxt:         { fontSize:12, color:'rgba(255,255,255,0.6)' },
-  statsRow:             { flexDirection:'row', gap:8, marginBottom:10 },
-  statCard:             { flex:1, backgroundColor:'rgba(255,255,255,0.04)', borderRadius:12, padding:12, alignItems:'center', borderWidth:1, borderColor:'rgba(255,255,255,0.06)' },
-  statNum:              { fontSize:20, fontWeight:'700' },
-  statLabel:            { fontSize:10, color:'rgba(255,255,255,0.25)', marginTop:2, textTransform:'uppercase', letterSpacing:0.5 },
-  settingsRow:          { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingVertical:13, borderBottomWidth:1, borderBottomColor:'rgba(255,255,255,0.04)' },
-  settingsLeft:         { flexDirection:'row', alignItems:'center', gap:10 },
-  settingsLabel:        { fontSize:14, color:'rgba(255,255,255,0.55)' },
-  logoutBtn:            { borderWidth:1, borderColor:'rgba(255,77,109,0.2)', borderRadius:50, padding:14, alignItems:'center', marginTop:8, marginBottom:10 },
-  logoutTxt:            { color:'rgba(255,77,109,0.6)', fontSize:15, fontWeight:'600' },
-  version:              { fontSize:11, color:'rgba(255,255,255,0.08)', textAlign:'center', marginBottom:10 },
+  container:            { flex:1, backgroundColor:'#07000c' },
+  scroll:               { flexGrow:1, backgroundColor:'#07000c' },
+  pageWrap:             { flex:1, minHeight:windowHeight, justifyContent:'flex-end' },
+
+  // Banner
+  banner:               { position:'absolute', top:0, left:0, right:0, minHeight:windowHeight * 0.55, overflow:'hidden' },
+  bannerWordmark:       { position:'absolute', top:52, left:16, fontSize:13, fontStyle:'italic', color:'#ff4d82', fontWeight:'600', letterSpacing:0.5 },
+  cameraBadge:          { position:'absolute', bottom:52, left:16, width:30, height:30, borderRadius:15, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center', zIndex:10 },
+  bannerBottom:         { position:'absolute', bottom:0, left:0, right:0, flexDirection:'row', justifyContent:'space-between', alignItems:'flex-end', paddingHorizontal:16, paddingBottom:16 },
+  bannerName:           { fontSize:20, fontWeight:'700', color:'#fff', letterSpacing:0.2 },
+  bannerAge:            { fontSize:13, color:'rgba(255,255,255,0.45)', marginTop:2 },
+  bannerTierPill:       { backgroundColor:'#ff4d82', borderRadius:50, paddingHorizontal:12, paddingVertical:5 },
+  bannerTierTxt:        { color:'#fff', fontSize:13, fontWeight:'700' },
+
+  // Below banner
+  below:                { backgroundColor:'#07000c', paddingTop:0, paddingBottom:120 },
+  bio:                  { fontSize:13, color:'rgba(255,255,255,0.42)', fontStyle:'italic', paddingHorizontal:16, paddingTop:12, paddingBottom:4, lineHeight:20 },
+  pillsRow:             { flexDirection:'row', gap:8, paddingHorizontal:16, paddingTop:10, marginBottom:14, flexWrap:'nowrap' },
+  interestPill:         { paddingHorizontal:12, paddingVertical:5, borderRadius:50, borderWidth:1, borderColor:'#ff4d82', backgroundColor:'rgba(255,77,130,0.10)' },
+  interestPillTxt:      { fontSize:12, color:'#ff4d82', fontWeight:'600' },
+
+  // Dividers
+  divider:              { height:1, backgroundColor:'rgba(255,255,255,0.06)', marginBottom:4 },
+  rowDivider:           { height:1, backgroundColor:'rgba(255,255,255,0.06)', marginHorizontal:16 },
+
+  // List rows
+  listRow:              { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingHorizontal:16, paddingVertical:16 },
+  listRowTxt:           { fontSize:15, color:'rgba(255,255,255,0.85)', fontWeight:'500' },
+
+  // Upgrade button
+  upgradeBtn:           { marginHorizontal:16, marginTop:24, borderRadius:50, backgroundColor:'#ff4d82', paddingVertical:15, alignItems:'center' },
+  upgradeTxt:           { color:'#fff', fontSize:15, fontWeight:'700' },
+
+  // Logout
+  logoutBtn:            { alignItems:'center', marginTop:14, marginBottom:10, paddingVertical:14 },
+  logoutTxt:            { color:'rgba(255,255,255,0.32)', fontSize:14, fontWeight:'500' },
+
+  // Modals
+  tabRow:               { flexDirection:'row', gap:8, marginBottom:14 },
+  tabBtn:               { flex:1, paddingVertical:9, borderRadius:50, alignItems:'center', backgroundColor:'rgba(255,255,255,0.07)', borderWidth:1, borderColor:'rgba(255,255,255,0.1)' },
+  tabBtnActive:         { backgroundColor:'rgba(255,77,130,0.18)', borderColor:'#ff4d82' },
+  tabBtnTxt:            { fontSize:13, fontWeight:'600', color:'rgba(255,255,255,0.4)' },
+  tabBtnTxtActive:      { color:'#ff4d82' },
   modalOverlay:         { flex:1, backgroundColor:'rgba(0,0,0,0.9)', justifyContent:'flex-end' },
-  modalCard:            { backgroundColor:'#111', borderRadius:24, padding:22, maxHeight:'92%', borderWidth:1, borderColor:'rgba(255,255,255,0.07)' },
+  modalCard:            { backgroundColor:'#1e0012', borderRadius:24, padding:22, maxHeight:'92%', borderWidth:1, borderColor:'rgba(255,255,255,0.12)' },
   modalHeader:          { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:6 },
   modalTitle:           { fontSize:18, fontWeight:'700', color:'#fff' },
-  modalSub:             { fontSize:12, color:'rgba(255,255,255,0.25)', marginBottom:16 },
+  modalSub:             { fontSize:12, color:'rgba(255,255,255,0.42)', marginBottom:16 },
   modalLabel:           { fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:1, marginBottom:8, marginTop:8 },
   photoGrid:            { flexDirection:'row', flexWrap:'wrap', gap:8 },
-  photoSlot:            { width:'23%', aspectRatio:3/4, borderRadius:10, overflow:'hidden', backgroundColor:'rgba(255,255,255,0.04)', borderWidth:1, borderColor:'rgba(255,255,255,0.07)', position:'relative' },
+  photoSlot:            { width:'23%', aspectRatio:3/4, borderRadius:10, overflow:'hidden', backgroundColor:'rgba(255,255,255,0.07)', borderWidth:1, borderColor:'rgba(255,255,255,0.12)', position:'relative' },
   photoImg:             { width:'100%', height:'100%' },
   photoEmpty:           { flex:1, alignItems:'center', justifyContent:'center' },
   mainBadge:            { position:'absolute', bottom:4, left:4, backgroundColor:'#ff4d82', borderRadius:4, paddingHorizontal:4, paddingVertical:1 },
   mainBadgeTxt:         { fontSize:8, color:'#fff', fontWeight:'700' },
   uploadRow:            { flexDirection:'row', alignItems:'center', gap:8, marginTop:10 },
   uploadTxt:            { fontSize:13, color:'rgba(255,255,255,0.4)' },
+  charCount:            { fontSize:11, color:'rgba(255,255,255,0.2)', textAlign:'right', marginTop:4 },
+  saveBtn:              { backgroundColor:'#ff4d82', borderRadius:50, padding:14, alignItems:'center', marginTop:12 },
+  saveBtnTxt:           { color:'#fff', fontSize:14, fontWeight:'700' },
   currentInterests:     { flexDirection:'row', flexWrap:'wrap', gap:6, marginBottom:12 },
-  interestSlot:         { paddingHorizontal:12, paddingVertical:7, borderRadius:50, borderWidth:1, borderColor:'rgba(255,255,255,0.1)', backgroundColor:'rgba(255,255,255,0.04)' },
+  interestSlot:         { paddingHorizontal:12, paddingVertical:7, borderRadius:50, borderWidth:1, borderColor:'rgba(255,255,255,0.15)', backgroundColor:'rgba(255,255,255,0.07)' },
   interestSlotTxt:      { fontSize:13, color:'#ff4d82', fontWeight:'600' },
   interestSlotEmpty:    { fontSize:13, color:'rgba(255,255,255,0.2)' },
   categoryScroll:       { maxHeight:180, marginBottom:10 },
   categoryGrid:         { flexDirection:'row', flexWrap:'wrap', gap:8 },
-  categoryPill:         { flexDirection:'row', alignItems:'center', gap:6, backgroundColor:'rgba(255,255,255,0.04)', borderRadius:20, paddingHorizontal:12, paddingVertical:8, borderWidth:1, borderColor:'rgba(255,255,255,0.07)' },
+  categoryPill:         { flexDirection:'row', alignItems:'center', gap:6, backgroundColor:'rgba(255,255,255,0.07)', borderRadius:20, paddingHorizontal:12, paddingVertical:8, borderWidth:1, borderColor:'rgba(255,255,255,0.12)' },
   categoryPillSelected: { backgroundColor:'rgba(255,77,130,0.2)', borderColor:'#ff4d82' },
   categoryEmoji:        { fontSize:14 },
-  categoryLabel:        { fontSize:12, color:'rgba(255,255,255,0.5)' },
+  categoryLabel:        { fontSize:12, color:'rgba(255,255,255,0.65)' },
   categoryLabelSelected:{ color:'#ff4d82', fontWeight:'700' },
   modalInput:           { backgroundColor:'rgba(255,255,255,0.06)', borderRadius:12, borderWidth:1, borderColor:'rgba(255,255,255,0.08)', padding:12, fontSize:14, color:'#fff', marginBottom:4 },
-  knowMeField:          { marginBottom:16 },
+  knowMeField:          { marginBottom:18 },
   knowMeFieldLeft:      { flexDirection:'row', alignItems:'center', gap:8, marginBottom:8 },
   knowMeFieldEmoji:     { fontSize:16 },
-  knowMeFieldLabel:     { fontSize:13, fontWeight:'600', color:'rgba(255,255,255,0.6)' },
-  knowMeInput:          { backgroundColor:'rgba(255,255,255,0.05)', borderRadius:10, borderWidth:1, borderColor:'rgba(255,255,255,0.08)', padding:11, fontSize:14, color:'#fff' },
+  knowMeFieldLabel:     { fontSize:13, fontWeight:'600', color:'rgba(255,255,255,0.75)' },
+  knowMeInput:          { backgroundColor:'rgba(255,255,255,0.08)', borderRadius:10, borderWidth:1, borderColor:'rgba(255,255,255,0.13)', padding:11, fontSize:14, color:'#fff' },
   optionsScroll:        { marginBottom:4 },
   optionsRow:           { flexDirection:'row', gap:8, paddingBottom:4 },
-  optionPill:           { paddingHorizontal:14, paddingVertical:7, borderRadius:50, borderWidth:1, borderColor:'rgba(255,255,255,0.1)', backgroundColor:'rgba(255,255,255,0.04)' },
+  optionPill:           { paddingHorizontal:14, paddingVertical:7, borderRadius:50, borderWidth:1, borderColor:'rgba(255,255,255,0.15)', backgroundColor:'rgba(255,255,255,0.07)' },
   optionPillSelected:   { borderColor:'#ff4d82', backgroundColor:'rgba(255,77,130,0.15)' },
-  optionPillTxt:        { fontSize:13, color:'rgba(255,255,255,0.4)' },
+  optionPillTxt:        { fontSize:13, color:'rgba(255,255,255,0.58)' },
   optionPillTxtSelected:{ color:'#ff4d82', fontWeight:'600' },
 });

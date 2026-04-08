@@ -17,7 +17,6 @@ export default function LikesScreen() {
   const [matches, setMatches]   = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
   const [mainTab, setMainTab]   = useState<'matches' | 'likes'>('matches');
-  const [intentTab, setIntentTab] = useState<'dating' | 'hookup'>('dating');
 
   useEffect(() => { loadData(); }, []);
 
@@ -71,20 +70,17 @@ export default function LikesScreen() {
   }
 
   const currentData = mainTab === 'matches' ? matches : likes;
-  const filteredData = currentData.filter(p =>
-    intentTab === 'dating'
-      ? p.intent !== 'hookup'
-      : p.intent === 'hookup'
-  );
+  const filteredData = currentData;
+  ;
 
   function ProfileCard({ profile, blurred }: { profile: any, blurred: boolean }) {
     const tierColor = getTierColor(profile.tier);
     return (
       <View style={s.card}>
         <View style={s.cardImg}>
-          {profile.photo_urls?.[0] ? (
+          {profile.profile_picture ? (
             <Image
-              source={{ uri: profile.photo_urls[0] }}
+              source={{ uri: profile.profile_picture }}
               style={[s.cardPhoto, blurred && s.cardPhotoBlurred]}
               resizeMode="cover"
             />
@@ -115,7 +111,7 @@ export default function LikesScreen() {
 
   if (loading) return (
     <View style={s.container}>
-      <LinearGradient colors={['#1a0010','#0d0008','#000']} style={StyleSheet.absoluteFillObject} />
+      <LinearGradient colors={['#2a0018','#150010','#0a0005']} style={StyleSheet.absoluteFillObject} />
       <ActivityIndicator color="#ff4d82" size="large" />
     </View>
   );
@@ -123,7 +119,7 @@ export default function LikesScreen() {
   return (
     <View style={s.container}>
       <LinearGradient
-        colors={['#1a0010', '#0d0008', '#000']}
+        colors={['#2a0018', '#150010', '#0a0005']}
         style={StyleSheet.absoluteFillObject}
       />
 
@@ -174,26 +170,6 @@ export default function LikesScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Intent tabs: Dating / Hookup */}
-      <View style={s.intentTabRow}>
-        <TouchableOpacity
-          style={[s.intentTab, intentTab === 'dating' && s.intentTabActive]}
-          onPress={() => setIntentTab('dating')}
-        >
-          <Text style={[s.intentTabTxt, intentTab === 'dating' && s.intentTabTxtActive]}>
-            💞 Dating
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[s.intentTab, intentTab === 'hookup' && s.intentTabActive]}
-          onPress={() => setIntentTab('hookup')}
-        >
-          <Text style={[s.intentTabTxt, intentTab === 'hookup' && s.intentTabTxtActive]}>
-            🔥 Hookups
-          </Text>
-        </TouchableOpacity>
-      </View>
-
       {/* Upgrade banner for likes */}
       {mainTab === 'likes' && likes.length > 0 && (
         <View style={s.upgradeBanner}>
@@ -215,7 +191,7 @@ export default function LikesScreen() {
           />
           <Text style={s.emptyTxt}>
             {mainTab === 'matches'
-              ? `No ${intentTab} matches yet!\nKeep swiping 🔥`
+              ? `No matches yet!\nKeep swiping 🔥`
               : `Nobody here yet!\nMake sure your profile looks great ✨`
             }
           </Text>
@@ -244,33 +220,28 @@ const s = StyleSheet.create({
   header:           { flexDirection:'row', alignItems:'center', gap:6, paddingHorizontal:20, paddingTop:54, paddingBottom:12 },
   logo:             { fontSize:18, fontWeight:'200', fontStyle:'italic', color:'#ff4d82', letterSpacing:4 },
   logoLine:         { flex:1, height:0.5, backgroundColor:'rgba(255,77,130,0.3)', marginTop:3 },
-  mainTabRow:       { flexDirection:'row', marginHorizontal:20, marginBottom:10, backgroundColor:'rgba(255,255,255,0.04)', borderRadius:12, padding:4, borderWidth:1, borderColor:'rgba(255,255,255,0.06)' },
+  mainTabRow:       { flexDirection:'row', marginHorizontal:20, marginBottom:10, backgroundColor:'rgba(255,255,255,0.06)', borderRadius:12, padding:4, borderWidth:1, borderColor:'rgba(255,255,255,0.1)' },
   mainTab:          { flex:1, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:6, paddingVertical:10, borderRadius:10 },
   mainTabActive:    { backgroundColor:'rgba(255,77,130,0.12)' },
-  mainTabTxt:       { fontSize:13, fontWeight:'600', color:'rgba(255,255,255,0.3)' },
+  mainTabTxt:       { fontSize:13, fontWeight:'600', color:'rgba(255,255,255,0.45)' },
   mainTabTxtActive: { color:'#ff4d82' },
   badge:            { backgroundColor:'#ff4d82', borderRadius:10, paddingHorizontal:6, paddingVertical:2 },
   badgeTxt:         { fontSize:10, color:'#fff', fontWeight:'700' },
-  intentTabRow:     { flexDirection:'row', marginHorizontal:20, marginBottom:12, gap:8 },
-  intentTab:        { flex:1, paddingVertical:8, borderRadius:50, borderWidth:1, borderColor:'rgba(255,255,255,0.08)', alignItems:'center', backgroundColor:'rgba(255,255,255,0.03)' },
-  intentTabActive:  { borderColor:'#ff4d82', backgroundColor:'rgba(255,77,130,0.1)' },
-  intentTabTxt:     { fontSize:12, fontWeight:'600', color:'rgba(255,255,255,0.3)' },
-  intentTabTxtActive:{ color:'#ff4d82' },
   upgradeBanner:    { flexDirection:'row', alignItems:'center', gap:8, marginHorizontal:20, marginBottom:12, backgroundColor:'rgba(255,77,130,0.06)', borderRadius:12, padding:12, borderWidth:1, borderColor:'rgba(255,77,130,0.15)' },
-  upgradeTxt:       { flex:1, fontSize:12, color:'rgba(255,255,255,0.4)' },
+  upgradeTxt:       { flex:1, fontSize:12, color:'rgba(255,255,255,0.58)' },
   upgradeBtn:       { backgroundColor:'#ff4d82', borderRadius:20, paddingHorizontal:12, paddingVertical:6 },
   upgradeBtnTxt:    { fontSize:12, color:'#fff', fontWeight:'700' },
   empty:            { flex:1, alignItems:'center', justifyContent:'center', gap:16, paddingHorizontal:40 },
-  emptyTxt:         { fontSize:15, color:'rgba(255,255,255,0.25)', textAlign:'center', lineHeight:22 },
+  emptyTxt:         { fontSize:15, color:'rgba(255,255,255,0.42)', textAlign:'center', lineHeight:22 },
   grid:             { padding:12, paddingBottom:100 },
   card:             { flex:1, margin:4, alignItems:'center', gap:5 },
-  cardImg:          { width:'100%', aspectRatio:3/4, borderRadius:12, overflow:'hidden', position:'relative', backgroundColor:'rgba(255,255,255,0.04)', borderWidth:1, borderColor:'rgba(255,255,255,0.06)' },
+  cardImg:          { width:'100%', aspectRatio:3/4, borderRadius:12, overflow:'hidden', position:'relative', backgroundColor:'rgba(255,255,255,0.07)', borderWidth:1, borderColor:'rgba(255,255,255,0.11)' },
   cardPhoto:        { width:'100%', height:'100%' },
   cardPhotoEmpty:   { width:'100%', height:'100%', alignItems:'center', justifyContent:'center' },
   cardPhotoBlurred: { opacity:0.12 },
   lockOverlay:      { position:'absolute', inset:0, alignItems:'center', justifyContent:'center', gap:4 },
   lockTxt:          { fontSize:10, color:'#ff4d82', fontWeight:'700' },
   tierDot:          { position:'absolute', top:6, right:6, width:8, height:8, borderRadius:4 },
-  cardName:         { fontSize:11, color:'rgba(255,255,255,0.6)', textAlign:'center', width:'100%' },
+  cardName:         { fontSize:11, color:'rgba(255,255,255,0.78)', textAlign:'center', width:'100%' },
   cardTier:         { fontSize:10, textAlign:'center' },
 });

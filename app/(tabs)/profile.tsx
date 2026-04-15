@@ -2,6 +2,7 @@ import { supabase } from '@/app/lib/supabase';
 import { Toast, useToast } from '@/app/lib/Toast';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -99,7 +100,8 @@ export default function ProfileScreen() {
   const [editingInterest, setEditingInterest]   = useState<number>(0);
   const [selectedCategory, setSelectedCategory] = useState<any>(null);
   const [interestDesc, setInterestDesc]         = useState('');
-  const [picPickerModal, setPicPickerModal]     = useState(false);
+  const [photoSlotModal, setPhotoSlotModal]     = useState(false);
+  const [activePhotoIndex, setActivePhotoIndex] = useState(0);
 
   useEffect(() => { loadProfile(); }, []);
 
@@ -180,7 +182,14 @@ export default function ProfileScreen() {
       cameraType: ImagePicker.CameraType.front,
       allowsEditing: false, exif: false, quality: 0.8,
     });
-    if (!result.canceled && result.assets[0]) await uploadPhoto(index, result.assets[0].uri);
+    if (!result.canceled && result.assets[0]) {
+      const flipped = await ImageManipulator.manipulateAsync(
+        result.assets[0].uri,
+        [{ flip: ImageManipulator.FlipType.Horizontal }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      await uploadPhoto(index, flipped.uri);
+    }
   }
 
   async function doUploadProfilePic(uri: string) {
@@ -207,48 +216,15 @@ export default function ProfileScreen() {
     }
   }
 
-  function handleProfilePictureChange() {
-    setPicPickerModal(true);
-  }
-
-  async function handleTakePhoto() {
-    setPicPickerModal(false);
-    setTimeout(async () => {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        showToast('❌', 'Permission needed', 'Please allow camera access in Settings');
-        return;
-      }
-      const result = await ImagePicker.launchCameraAsync({
-        cameraType: ImagePicker.CameraType.front,
-        allowsEditing: true,
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets[0]) await doUploadProfilePic(result.assets[0].uri);
-    }, 400);
-  }
-
-  async function handleChooseFromLibrary() {
-    setPicPickerModal(false);
-    setTimeout(async () => {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        showToast('❌', 'Permission needed', 'Please allow photo access in Settings');
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets[0]) await doUploadProfilePic(result.assets[0].uri);
-    }, 400);
-  }
-
   function openEditProfile() {
     setEditName(profile?.name || '');
-    setEditBirthday(profile?.birthday || '');
+    const stored = profile?.birthday || '';
+    if (stored && stored.length === 10 && stored.includes('-')) {
+      const [y, m, d] = stored.split('-');
+      setEditBirthday(`${m}/${d}/${y}`);
+    } else {
+      setEditBirthday('');
+    }
     setEditBio(bio);
     setEditProfileModal(true);
   }
@@ -321,7 +297,8 @@ export default function ProfileScreen() {
       if (!userData.user) return;
       const updates: any = { name: editName.trim(), bio: editBio };
       if (editBirthday.length === 10) {
-        const isoDate = `${editBirthday.slice(6,10)}-${editBirthday.slice(0,2)}-${editBirthday.slice(3,5)}`;
+        const [m, d, y] = editBirthday.split('/');
+        const isoDate = `${y}-${m}-${d}`;
         updates.birthday = isoDate;
         updates.age = calculateAge(isoDate);
       }
@@ -403,19 +380,11 @@ export default function ProfileScreen() {
           {/* Allure wordmark */}
           <Text style={s.bannerWordmark}>Allure</Text>
 
-          {/* Camera badge */}
-          <TouchableOpacity style={s.cameraBadge} onPress={handleProfilePictureChange} activeOpacity={0.8}>
-            {uploadingProfilePic
-              ? <ActivityIndicator size="small" color="#fff" />
-              : <Ionicons name="camera" size={14} color="#fff" />
-            }
-          </TouchableOpacity>
-
           {/* Bottom info row */}
           <View style={s.bannerBottom}>
-            <View>
+            <View style={{ flexShrink: 1, marginRight: 8 }}>
               <Text style={s.bannerName}>{profile?.name || 'Your Name'}</Text>
-              {profile?.age ? <Text style={s.bannerAge}>{profile.age} years old</Text> : null}
+              {profile?.age ? <Text style={s.bannerAge}>Age {profile.age}</Text> : null}
             </View>
             <View style={s.bannerTierPill}>
               <Text style={s.bannerTierTxt}>{tierEmoji} {profile?.score || 0}</Text>
@@ -463,8 +432,8 @@ export default function ProfileScreen() {
           <View style={s.divider} />
 
           {/* Upgrade */}
-          <TouchableOpacity style={s.upgradeBtn} onPress={() => {}}>
-            <Text style={s.upgradeTxt}>⭐ Upgrade to Gold</Text>
+          <TouchableOpacity style={s.upgradeBtn} onPress={() => router.push('/subscription')}>
+            <Text style={s.upgradeTxt}>✨ Upgrade to Allure+</Text>
           </TouchableOpacity>
 
           {/* Log Out */}
@@ -477,28 +446,11 @@ export default function ProfileScreen() {
         </View>{/* end pageWrap */}
       </ScrollView>
 
-      {/* Profile Picture Picker Modal */}
-      <Modal visible={picPickerModal} transparent animationType="fade">
-        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' }}>
-          <View style={{ backgroundColor: '#1a0010', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 40, paddingHorizontal: 20, paddingTop: 24 }}>
-            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontWeight: '600', textAlign: 'center', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 20 }}>Profile Photo</Text>
-            <TouchableOpacity onPress={handleTakePhoto} style={{ paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' }}>
-              <Text style={{ color: '#ff2d78', fontSize: 17, fontWeight: '600', textAlign: 'center' }}>Take a Photo</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleChooseFromLibrary} style={{ paddingVertical: 16 }}>
-              <Text style={{ color: '#ff2d78', fontSize: 17, fontWeight: '600', textAlign: 'center' }}>Choose from Library</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setPicPickerModal(false)} style={{ marginTop: 8, paddingVertical: 14, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 12 }}>
-              <Text style={{ color: 'rgba(255,255,255,0.35)', fontSize: 16, fontWeight: '500', textAlign: 'center' }}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
       {/* Edit Profile Modal */}
       <Modal visible={editProfileModal} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <View style={[s.modalCard, { maxHeight:'94%' }]}>
+
             <View style={s.modalHeader}>
               <Text style={s.modalTitle}>Edit Profile</Text>
               <TouchableOpacity onPress={() => setEditProfileModal(false)}>
@@ -506,6 +458,53 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView showsVerticalScrollIndicator={false}>
+
+              {/* Profile Picture */}
+              <Text style={s.modalLabel}>Profile Picture</Text>
+              <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                <View style={{ width: 80, height: 80, borderRadius: 40, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.08)', marginBottom: 12 }}>
+                  {profilePicture
+                    ? <Image source={{ uri: profilePicture }} style={{ width: 80, height: 80 }} resizeMode="cover" />
+                    : <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                        <Ionicons name="person" size={36} color="rgba(255,255,255,0.2)" />
+                      </View>
+                  }
+                </View>
+                {uploadingProfilePic
+                  ? <ActivityIndicator color="#ff4d82" />
+                  : <View style={{ flexDirection: 'row', gap: 10 }}>
+                      <TouchableOpacity
+                        style={{ borderWidth: 1, borderColor: '#ff4d82', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 7 }}
+                        onPress={async () => {
+                          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+                          if (status !== 'granted') { showToast('❌', 'Permission needed', 'Allow camera access in Settings'); return; }
+                          const result = await ImagePicker.launchCameraAsync({ cameraType: ImagePicker.CameraType.front, allowsEditing: true, quality: 0.8 });
+                          if (!result.canceled && result.assets[0]) {
+                            const flipped = await ImageManipulator.manipulateAsync(
+                              result.assets[0].uri,
+                              [{ flip: ImageManipulator.FlipType.Horizontal }],
+                              { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+                            );
+                            await doUploadProfilePic(flipped.uri);
+                          }
+                        }}
+                      >
+                        <Text style={{ color: '#ff4d82', fontSize: 13, fontWeight: '600' }}>Take Photo</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{ borderWidth: 1, borderColor: '#ff4d82', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 7 }}
+                        onPress={async () => {
+                          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                          if (status !== 'granted') { showToast('❌', 'Permission needed', 'Allow photo access in Settings'); return; }
+                          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.8 });
+                          if (!result.canceled && result.assets[0]) await doUploadProfilePic(result.assets[0].uri);
+                        }}
+                      >
+                        <Text style={{ color: '#ff4d82', fontSize: 13, fontWeight: '600' }}>Choose Photo</Text>
+                      </TouchableOpacity>
+                    </View>
+                }
+              </View>
 
               <Text style={s.modalLabel}>Name</Text>
               <TextInput
@@ -515,26 +514,6 @@ export default function ProfileScreen() {
                 placeholder="Your full name"
                 placeholderTextColor="rgba(255,255,255,0.2)"
                 autoCapitalize="words"
-              />
-
-              <Text style={s.modalLabel}>Birthday</Text>
-              <TextInput
-                style={s.modalInput}
-                value={editBirthday.length === 10
-                  ? `${editBirthday.slice(5,7)}/${editBirthday.slice(8,10)}/${editBirthday.slice(0,4)}`
-                  : editBirthday}
-                onChangeText={t => {
-                  const fmt = formatBirthday(t);
-                  if (fmt.length === 10) {
-                    setEditBirthday(`${fmt.slice(6,10)}-${fmt.slice(0,2)}-${fmt.slice(3,5)}`);
-                  } else {
-                    setEditBirthday(fmt);
-                  }
-                }}
-                placeholder="MM/DD/YYYY"
-                placeholderTextColor="rgba(255,255,255,0.2)"
-                keyboardType="numeric"
-                maxLength={10}
               />
 
               <Text style={s.modalLabel}>Bio</Text>
@@ -549,6 +528,17 @@ export default function ProfileScreen() {
               />
               <Text style={s.charCount}>{editBio.length}/150</Text>
 
+              <Text style={s.modalLabel}>Birthday</Text>
+              <TextInput
+                style={s.modalInput}
+                value={editBirthday}
+                onChangeText={t => setEditBirthday(formatBirthday(t))}
+                placeholder="MM/DD/YYYY"
+                placeholderTextColor="rgba(255,255,255,0.2)"
+                keyboardType="numeric"
+                maxLength={10}
+              />
+
               <Text style={[s.modalLabel, { marginTop:16 }]}>Photos</Text>
               <Text style={s.modalSub}>Tap to add · Long press to remove · Up to 8 photos</Text>
               <View style={s.photoGrid}>
@@ -556,11 +546,8 @@ export default function ProfileScreen() {
                   <TouchableOpacity
                     key={i}
                     style={s.photoSlot}
-                    onPress={() => Alert.alert('Add Photo', '', [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: '🤳 Take Selfie', onPress: () => takeSelfie(i) },
-                      { text: '🖼️ Choose from Library', onPress: () => uploadPhoto(i) },
-                    ])}
+                    activeOpacity={0.7}
+                    onPress={() => { setActivePhotoIndex(i); setPhotoSlotModal(true); }}
                     onLongPress={() => photos[i] && Alert.alert('Remove?', '', [
                       { text:'Cancel', style:'cancel' },
                       { text:'Remove', style:'destructive', onPress:() => removePhoto(i) },
@@ -599,6 +586,39 @@ export default function ProfileScreen() {
               <View style={{ height: 20 }} />
             </ScrollView>
           </View>
+
+          {/* Photo Picker Overlay — inside Edit Profile modal to avoid nested Modal on iOS */}
+          {photoSlotModal && (
+            <View style={{ position:'absolute', inset:0, justifyContent:'flex-end', backgroundColor:'rgba(0,0,0,0.6)' }}>
+              <View style={{ backgroundColor:'#0a0005', borderTopLeftRadius:24, borderTopRightRadius:24, paddingBottom:36, paddingHorizontal:20, paddingTop:12 }}>
+                <View style={{ width:36, height:4, borderRadius:2, backgroundColor:'rgba(255,255,255,0.12)', alignSelf:'center', marginBottom:18 }} />
+                <Text style={{ fontSize:10, fontWeight:'700', color:'rgba(255,255,255,0.28)', textAlign:'center', letterSpacing:1.5, textTransform:'uppercase', marginBottom:16 }}>Add Photo</Text>
+                <TouchableOpacity
+                  style={{ flexDirection:'row', alignItems:'center', paddingVertical:14, borderBottomWidth:1, borderBottomColor:'rgba(255,255,255,0.05)' }}
+                  onPress={() => { setPhotoSlotModal(false); takeSelfie(activePhotoIndex); }}
+                >
+                  <View style={{ width:34, height:34, borderRadius:17, backgroundColor:'rgba(255,77,130,0.08)', borderWidth:1, borderColor:'rgba(255,77,130,0.18)', alignItems:'center', justifyContent:'center', marginRight:14 }}>
+                    <Ionicons name="camera" size={16} color="#ff4d82" />
+                  </View>
+                  <Text style={{ flex:1, fontSize:16, color:'#fff', fontWeight:'500' }}>Take a Photo</Text>
+                  <Ionicons name="chevron-forward" size={16} color="rgba(255,77,130,0.6)" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ flexDirection:'row', alignItems:'center', paddingVertical:14 }}
+                  onPress={() => { setPhotoSlotModal(false); uploadPhoto(activePhotoIndex); }}
+                >
+                  <View style={{ width:34, height:34, borderRadius:17, backgroundColor:'rgba(255,77,130,0.08)', borderWidth:1, borderColor:'rgba(255,77,130,0.18)', alignItems:'center', justifyContent:'center', marginRight:14 }}>
+                    <Ionicons name="image" size={16} color="#ff4d82" />
+                  </View>
+                  <Text style={{ flex:1, fontSize:16, color:'#fff', fontWeight:'500' }}>Choose from Library</Text>
+                  <Ionicons name="chevron-forward" size={16} color="rgba(255,77,130,0.6)" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setPhotoSlotModal(false)} style={{ marginTop:16 }}>
+                  <Text style={{ textAlign:'center', fontSize:15, color:'rgba(255,255,255,0.3)', fontWeight:'500' }}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </View>
       </Modal>
 
@@ -739,10 +759,10 @@ const s = StyleSheet.create({
   banner:               { position:'absolute', top:0, left:0, right:0, minHeight:windowHeight * 0.55, overflow:'hidden' },
   bannerWordmark:       { position:'absolute', top:52, left:16, fontSize:13, fontStyle:'italic', color:'#ff4d82', fontWeight:'600', letterSpacing:0.5 },
   cameraBadge:          { position:'absolute', bottom:52, left:16, width:30, height:30, borderRadius:15, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center', zIndex:10 },
-  bannerBottom:         { position:'absolute', bottom:0, left:0, right:0, flexDirection:'row', justifyContent:'space-between', alignItems:'flex-end', paddingHorizontal:16, paddingBottom:16 },
-  bannerName:           { fontSize:20, fontWeight:'700', color:'#fff', letterSpacing:0.2 },
+  bannerBottom:         { position:'absolute', bottom:40, left:0, right:0, flexDirection:'row', justifyContent:'space-between', alignItems:'flex-end', paddingHorizontal:16, paddingBottom:16 },
+  bannerName:           { fontSize:20, fontWeight:'700', color:'#fff', letterSpacing:0.2, flexShrink:1, flexWrap:'wrap' },
   bannerAge:            { fontSize:13, color:'rgba(255,255,255,0.45)', marginTop:2 },
-  bannerTierPill:       { backgroundColor:'#ff4d82', borderRadius:50, paddingHorizontal:12, paddingVertical:5 },
+  bannerTierPill:       { backgroundColor:'#ff4d82', borderRadius:50, paddingHorizontal:12, paddingVertical:5, flexShrink:0 },
   bannerTierTxt:        { color:'#fff', fontSize:13, fontWeight:'700' },
 
   // Below banner

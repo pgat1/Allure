@@ -4,7 +4,7 @@
     "slug": "allure",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/icon.png",
     "scheme": "allure",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -32,6 +32,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-iap",
       [
         "expo-image-picker",
         {

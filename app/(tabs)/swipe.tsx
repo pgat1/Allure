@@ -1,7 +1,11 @@
 import { supabase } from '@/app/lib/supabase';
-import { sendMatchNotification } from '@/app/lib/notifications';
+import { sendMatchNotification, sendPushToUser } from '@/app/lib/notifications';
+import { getUserTier, CRUSH_LIMIT, UserTier } from '@/app/lib/subscription';
+import { useToast } from '@/app/lib/Toast';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,15 +21,22 @@ import {
   View,
 } from 'react-native';
 
+const CRUSH_KEY = 'crush_daily'; // AsyncStorage key prefix
+
 const { width, height } = Dimensions.get('window');
 
 export default function SwipeScreen() {
-  const [profiles, setProfiles]       = useState<any[]>([]);
-  const [loading, setLoading]         = useState(true);
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [lastAction, setLastAction]   = useState<string | null>(null);
-  const [matchPopup, setMatchPopup]   = useState<any>(null);
-const [revealModal, setRevealModal] = useState<any>(null);
+  const router                            = useRouter();
+  const { showToast, toastJSX }           = useToast();
+  const [profiles, setProfiles]           = useState<any[]>([]);
+  const [loading, setLoading]             = useState(true);
+  const [currentUser, setCurrentUser]     = useState<any>(null);
+  const [currentUserName, setCurrentUserName] = useState<string>('');
+  const [lastAction, setLastAction]       = useState<string | null>(null);
+  const [matchPopup, setMatchPopup]       = useState<any>(null);
+  const [revealModal, setRevealModal]     = useState<any>(null);
+  const [tier, setTier]                   = useState<UserTier>('free');
+  const [crushModal, setCrushModal]       = useState(false);
   const swipeAnim = useRef(new Animated.ValueXY()).current;
 
   const rotateAnim = swipeAnim.x.interpolate({
@@ -50,6 +61,32 @@ const [revealModal, setRevealModal] = useState<any>(null);
       if (!userData.user) return;
       setCurrentUser(userData.user);
 
+      const userTier = await getUserTier(userData.user.id);
+      setTier(userTier);
+
+      const { data: myProfile } = await supabase
+        .from('profiles')
+        .select('name, subscription_tier, boost_expires_at')
+        .eq('id', userData.user.id)
+        .single();
+
+      setCurrentUserName(myProfile?.name?.split(' ')[0] || '');
+
+      // Boost activation: plusplus users get a 24h boost on every app open
+      if (myProfile?.subscription_tier === 'plusplus') {
+        const expiry = myProfile.boost_expires_at;
+        const isExpired = !expiry || new Date(expiry).getTime() <= Date.now();
+        if (isExpired) {
+          await supabase
+            .from('profiles')
+            .update({
+              boosted: true,
+              boost_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            })
+            .eq('id', userData.user.id);
+        }
+      }
+
       const { data: likedUsers }   = await supabase.from('likes').select('to_user').eq('from_user', userData.user.id);
       const { data: blockedUsers } = await supabase.from('blocks').select('blocked_id').eq('blocker_id', userData.user.id);
 
@@ -59,8 +96,14 @@ const [revealModal, setRevealModal] = useState<any>(null);
         userData.user.id,
       ];
 
-      const { data: profileData } = await supabase.from('profiles').select('*').limit(20);
-      const filtered = profileData?.filter(p => !excludeIds.includes(p.id)) || [];
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('boosted', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(40);
+
+      const filtered = (profileData || []).filter(p => !excludeIds.includes(p.id));
       setProfiles(filtered);
     } catch (err) {
       console.log('Error:', err);
@@ -98,6 +141,41 @@ const [revealModal, setRevealModal] = useState<any>(null);
         }
       }
     });
+  }
+
+  async function handleCrush() {
+    if (profiles.length === 0 || !currentUser) return;
+
+    const limit = CRUSH_LIMIT[tier];
+
+    // Free users — no crushes
+    if (limit === 0) {
+      setCrushModal(true);
+      return;
+    }
+
+    // Plus users — 3/day via AsyncStorage with daily reset
+    if (limit !== Infinity) {
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const stored = await AsyncStorage.getItem(CRUSH_KEY);
+      const parsed = stored ? JSON.parse(stored) : { date: today, count: 0 };
+      const count  = parsed.date === today ? parsed.count : 0;
+
+      if (count >= limit) {
+        showToast('⏳', `You've used all ${limit} crushes today. Resets tomorrow!`);
+        return;
+      }
+
+      await AsyncStorage.setItem(CRUSH_KEY, JSON.stringify({ date: today, count: count + 1 }));
+    }
+
+    // Send crush
+    const current = profiles[0];
+    await supabase.from('likes').insert({ from_user: currentUser.id, to_user: current.id, comment: 'crush' });
+    const senderName = currentUserName || 'Someone';
+    await sendPushToUser(current.id, `${senderName} has a crush on you 💗`, '');
+    showToast('💗', 'Crush sent!');
+    setProfiles(prev => prev.slice(1));
   }
 
   async function handleReport() {
@@ -214,42 +292,15 @@ const [revealModal, setRevealModal] = useState<any>(null);
               </View>
             )}
 
-            {/* Score bar */}
-            <View style={s.scoreBarWrap}>
-              <View style={s.scoreBarTrack}>
-                <View style={[s.scoreBarFill, { width: `${score}%` as any }]} />
-                <Text style={s.scoreBarTxt}>{score} / 100</Text>
-              </View>
-            </View>
-
-
-            {/* Bottom gradient + info */}
-            <LinearGradient
-              colors={['transparent', 'rgba(0,0,0,0.4)', 'rgba(0,0,0,0.88)']}
-              style={s.infoOverlay}
+            {/* Tap hint — full profile */}
+            <TouchableOpacity
+              activeOpacity={0.95}
+              onPress={() => setRevealModal(current)}
+              style={s.tapHintOverlay}
             >
-              <TouchableOpacity activeOpacity={0.95} onPress={() => setRevealModal(current)} style={s.infoTouchable}>
-                <Text style={s.overlayName}>{current.name}, {current.age || '?'}</Text>
-                <View style={[s.tierPill, { borderColor:`${tierColor}70`, backgroundColor:`${tierColor}20` }]}>
-                  <Text style={[s.tierPillTxt, { color: tierColor }]}>
-                    {getTierEmoji(current.tier)} {current.tier}
-                  </Text>
-                </View>
-                {current.interests?.length > 0 && (
-                  <View style={s.interestRow}>
-                    {current.interests.slice(0, 3).map((int: any, i: number) => (
-                      <View key={i} style={s.interestPill}>
-                        <Text style={s.interestPillTxt}>{int.emoji} {int.label}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-                <View style={s.tapHint}>
-                  <Ionicons name="chevron-up" size={13} color="rgba(255,255,255,0.55)" />
-                  <Text style={s.tapHintTxt}>Tap for full profile</Text>
-                </View>
-              </TouchableOpacity>
-            </LinearGradient>
+              <Ionicons name="chevron-up" size={13} color="rgba(255,255,255,0.55)" />
+              <Text style={s.tapHintTxt}>Tap for full profile</Text>
+            </TouchableOpacity>
 
             {/* Scroll-down arrow */}
             {photos.length > 1 && (
@@ -299,9 +350,46 @@ const [revealModal, setRevealModal] = useState<any>(null);
           ))}
 
           {/* Spacer so last photo isn't hidden behind buttons */}
-          <View style={{ height: 130 }} />
+          <View style={{ height: 200 }} />
         </ScrollView>
       </Animated.View>
+
+      {/* Report flag — top-left of card */}
+      <TouchableOpacity style={s.reportFlagBtn} onPress={handleReport}>
+        <Ionicons name="flag" size={14} color="#FFD700" />
+      </TouchableOpacity>
+
+      {/* Top info — name, age, tier icon, bio/location */}
+      <View style={s.topInfoWrap} pointerEvents="none">
+        <View style={s.topInfoBackdrop}>
+          <View style={s.topInfoRow}>
+            <View style={s.topInfoTextCol}>
+              <Text style={s.topInfoName} numberOfLines={1}>{current.name}, {current.age || '?'}</Text>
+              <Text style={s.topInfoSub} numberOfLines={1}>
+                {current.location || (current.bio ? current.bio.slice(0, 50) : '')}
+              </Text>
+            </View>
+            <View style={[s.topInfoTierCircle, { borderColor: tierColor }]}>
+              <Text style={{ color: tierColor, fontSize: 14 }}>{getTierEmoji(current.tier)}</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {/* New score bar */}
+      <View style={s.newScoreWrap} pointerEvents="none">
+        <Text style={s.newScoreTxt}>{score}</Text>
+        <View style={s.newScoreTrack}>
+          <LinearGradient
+            colors={['rgba(255,77,130,0.3)', '#ff4d82']}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={[s.newScoreFill, { width: `${score}%` as any }]}
+          >
+            <View style={s.newScoreDot} />
+          </LinearGradient>
+        </View>
+      </View>
 
       {/* Action badge */}
       {lastAction && (
@@ -310,15 +398,52 @@ const [revealModal, setRevealModal] = useState<any>(null);
         </View>
       )}
 
-      {/* Floating buttons */}
+      {/* Floating action buttons */}
       <View style={s.floatingButtons}>
         <TouchableOpacity style={s.passBtn} onPress={() => handleSwipe('left')}>
-          <Ionicons name="close" size={22} color="#ff4d82" />
+          <Ionicons name="close" size={17} color="#ff4d6d" />
         </TouchableOpacity>
+
         <TouchableOpacity style={s.likeBtn} onPress={() => handleSwipe('right')}>
-          <Ionicons name="heart" size={22} color="#ff4d82" />
+          <Ionicons name="heart" size={21} color="#fff" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={s.crushBtn} onPress={handleCrush}>
+          <View style={s.crushIconWrap}>
+            <View style={s.crushHeartLeft}>
+              <Ionicons name="heart" size={10} color="#ff4d82" />
+            </View>
+            <Ionicons name="heart" size={14} color="#ff4d82" />
+            <View style={s.crushHeartRight}>
+              <Ionicons name="heart" size={10} color="#ff4d82" />
+            </View>
+          </View>
         </TouchableOpacity>
       </View>
+
+      {toastJSX}
+
+      {/* Crush upgrade modal */}
+      <Modal visible={crushModal} transparent animationType="fade">
+        <View style={s.crushModalOverlay}>
+          <View style={s.crushModalBox}>
+            <Text style={s.crushModalEmoji}>💗</Text>
+            <Text style={s.crushModalTitle}>Send a Crush</Text>
+            <Text style={s.crushModalBody}>
+              Crushes let someone know you're really interested.{'\n'}Upgrade to Allure+ to send up to 3 per day.
+            </Text>
+            <TouchableOpacity
+              style={s.crushModalBtn}
+              onPress={() => { setCrushModal(false); router.push('/subscription'); }}
+            >
+              <Text style={s.crushModalBtnTxt}>Upgrade to Allure+</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setCrushModal(false)} style={s.crushModalCancel}>
+              <Text style={s.crushModalCancelTxt}>Maybe Later</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Full Profile Reveal Modal */}
       <Modal visible={!!revealModal} transparent animationType="slide">
@@ -426,23 +551,25 @@ const s = StyleSheet.create({
   mainPhoto:          { position:'absolute', top:0, left:0, right:0, bottom:0 },
   mainPhotoEmpty:     { position:'absolute', top:0, left:0, right:0, bottom:0, alignItems:'center', justifyContent:'center' },
 
-  // ── Score bar ──
-  scoreBarWrap:       { position:'absolute', top:54, left:16, right:16, zIndex:10 },
-  scoreBarTrack:      { height:38, borderRadius:19, borderWidth:1.5, borderColor:'rgba(255,255,255,0.22)', backgroundColor:'rgba(0,0,0,0.52)', overflow:'hidden', alignItems:'center', justifyContent:'center' },
-  scoreBarFill:       { position:'absolute', left:0, top:0, bottom:0, backgroundColor:'#ff4d82', borderRadius:19, opacity:0.82 },
-  scoreBarTxt:        { fontSize:13, fontWeight:'700', color:'#fff', letterSpacing:0.8, zIndex:1 },
+  // ── Top info overlay ──
+  topInfoWrap:        { position:'absolute', top:70, left:54, right:14, zIndex:20 },
+  topInfoBackdrop:    { backgroundColor:'rgba(0,0,0,0.35)', borderRadius:12, paddingVertical:8, paddingHorizontal:10 },
+  topInfoRow:         { flexDirection:'row', alignItems:'center', gap:8 },
+  topInfoTextCol:     { flex:1 },
+  topInfoName:        { fontSize:18, fontWeight:'800', color:'#fff', letterSpacing:0.1, textShadowColor:'rgba(0,0,0,0.8)', textShadowOffset:{ width:0, height:1 }, textShadowRadius:4 },
+  topInfoSub:         { fontSize:10, color:'rgba(255,255,255,0.75)', marginTop:2 },
+  topInfoTierCircle:  { width:30, height:30, borderRadius:15, borderWidth:1.5, alignItems:'center', justifyContent:'center', backgroundColor:'rgba(0,0,0,0.3)' },
+
+  // ── New score bar ──
+  newScoreWrap:       { position:'absolute', top:114, left:14, right:14, zIndex:20 },
+  newScoreTxt:        { fontSize:13, fontWeight:'800', color:'#ff4d82', textAlign:'right', marginBottom:4 },
+  newScoreTrack:      { height:3, backgroundColor:'rgba(255,255,255,0.08)', borderRadius:2 },
+  newScoreFill:       { height:3, borderRadius:2 },
+  newScoreDot:        { position:'absolute', right:-3.5, top:-2, width:7, height:7, borderRadius:3.5, backgroundColor:'#ff4d82', borderWidth:1.5, borderColor:'#fff', shadowColor:'#ff4d82', shadowRadius:4, shadowOpacity:1, shadowOffset:{ width:0, height:0 } },
 
 
-  // ── Bottom info overlay ──
-  infoOverlay:        { position:'absolute', bottom:0, left:0, right:0, paddingTop:100, paddingBottom:108 },
-  infoTouchable:      { paddingHorizontal:20, gap:9 },
-  overlayName:        { fontSize:30, fontWeight:'700', color:'#fff', letterSpacing:0.2 },
-  tierPill:           { alignSelf:'flex-start', paddingHorizontal:14, paddingVertical:5, borderRadius:50, borderWidth:1 },
-  tierPillTxt:        { fontSize:12, fontWeight:'700', letterSpacing:0.5 },
-  interestRow:        { flexDirection:'row', gap:6, flexWrap:'wrap' },
-  interestPill:       { backgroundColor:'rgba(255,77,130,0.18)', borderRadius:20, paddingHorizontal:10, paddingVertical:4, borderWidth:1, borderColor:'rgba(255,77,130,0.35)' },
-  interestPillTxt:    { fontSize:11, color:'rgba(255,77,130,0.95)' },
-  tapHint:            { flexDirection:'row', alignItems:'center', gap:4 },
+  // ── Tap hint (bottom of main photo) ──
+  tapHintOverlay:     { position:'absolute', bottom:16, left:0, right:0, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:4 },
   tapHintTxt:         { fontSize:11, color:'rgba(255,255,255,0.55)' },
 
   // ── Scroll-down hint ──
@@ -461,10 +588,17 @@ const s = StyleSheet.create({
   actionBadge:        { position:'absolute', top:170, left:0, right:0, alignItems:'center', zIndex:30 },
   actionBadgeTxt:     { fontSize:16, fontWeight:'700', color:'#ff4d82', backgroundColor:'rgba(0,0,0,0.65)', paddingHorizontal:18, paddingVertical:8, borderRadius:20, borderWidth:1, borderColor:'rgba(255,77,130,0.3)', overflow:'hidden' },
 
+  // ── Report flag button ──
+  reportFlagBtn:      { position:'absolute', top:54, left:16, zIndex:20, width:28, height:28, borderRadius:14, backgroundColor:'rgba(0,0,0,0.4)', alignItems:'center', justifyContent:'center' },
+
   // ── Floating buttons ──
-  floatingButtons:    { position:'absolute', bottom:0, left:0, right:0, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:32, zIndex:10, paddingBottom:120 },
-  passBtn:            { width:58, height:58, borderRadius:29, backgroundColor:'rgba(0,0,0,0.3)', borderWidth:1.5, borderColor:'#ff4d82', alignItems:'center', justifyContent:'center' },
-  likeBtn:            { width:58, height:58, borderRadius:29, backgroundColor:'rgba(0,0,0,0.3)', borderWidth:1.5, borderColor:'#ff4d82', alignItems:'center', justifyContent:'center' },
+  floatingButtons:    { position:'absolute', bottom:110, left:0, right:0, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:20, zIndex:10 },
+  passBtn:            { width:36, height:36, borderRadius:18, backgroundColor:'transparent', borderWidth:1, borderColor:'rgba(255,77,109,0.4)', alignItems:'center', justifyContent:'center' },
+  likeBtn:            { width:48, height:48, borderRadius:24, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center' },
+  crushBtn:           { width:36, height:36, borderRadius:18, backgroundColor:'transparent', borderWidth:1, borderColor:'rgba(255,77,130,0.4)', alignItems:'center', justifyContent:'center' },
+  crushIconWrap:      { width:36, height:36, alignItems:'center', justifyContent:'center' },
+  crushHeartLeft:     { position:'absolute', left:4, top:13, transform:[{ rotate:'-28deg' }] },
+  crushHeartRight:    { position:'absolute', right:4, top:13, transform:[{ rotate:'28deg' }] },
 
   // ── Section separator ──
   separator:          { height:2, width:'100%', backgroundColor:'#ff4d82', opacity:0.6 },
@@ -501,4 +635,15 @@ const s = StyleSheet.create({
   revealPassBtn:      { width:56, height:56, borderRadius:28, borderWidth:2, borderColor:'rgba(255,77,109,0.4)', alignItems:'center', justifyContent:'center', backgroundColor:'rgba(255,77,109,0.1)' },
   revealLikeBtn:      { flex:1, flexDirection:'row', gap:8, height:56, borderRadius:28, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center' },
   revealLikeTxt:      { color:'#fff', fontSize:16, fontWeight:'700' },
+
+  // Crush upgrade modal
+  crushModalOverlay:  { flex:1, backgroundColor:'rgba(0,0,0,0.7)', alignItems:'center', justifyContent:'center', padding:32 },
+  crushModalBox:      { width:'100%', backgroundColor:'#130008', borderRadius:20, padding:24, alignItems:'center', borderWidth:1, borderColor:'rgba(255,77,130,0.25)' },
+  crushModalEmoji:    { fontSize:36, marginBottom:12 },
+  crushModalTitle:    { fontSize:20, fontWeight:'700', color:'#fff', marginBottom:8 },
+  crushModalBody:     { fontSize:14, color:'rgba(255,255,255,0.55)', textAlign:'center', lineHeight:20, marginBottom:24 },
+  crushModalBtn:      { width:'100%', backgroundColor:'#ff4d82', borderRadius:14, paddingVertical:14, alignItems:'center', marginBottom:10 },
+  crushModalBtnTxt:   { color:'#fff', fontSize:15, fontWeight:'700' },
+  crushModalCancel:   { paddingVertical:8 },
+  crushModalCancelTxt:{ color:'rgba(255,255,255,0.3)', fontSize:13 },
 });

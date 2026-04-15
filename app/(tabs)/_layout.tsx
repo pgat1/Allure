@@ -59,25 +59,37 @@ export default function TabLayout() {
       <Tabs.Screen name="index"    options={{ href: null }} />
       <Tabs.Screen name="auth"     options={{ href: null }} />
       <Tabs.Screen name="facescan" options={{ href: null }} />
+      <Tabs.Screen name="explore"  options={{ href: null }} />
+      <Tabs.Screen
+        name="likes"
+        options={{
+          title: "Allure'd",
+          headerShown: false,
+          tabBarIcon: ({ focused }) => (
+            <TabIcon name={focused ? 'heart-circle' : 'heart-circle-outline'} focused={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="likestab"
+        options={{
+          title: 'Likes',
+          headerShown: false,
+          tabBarIcon: ({ focused }) => (
+            <TabIcon
+              name={focused ? 'star' : 'star-outline'}
+              focused={focused}
+              badge={formatBadge(counts.likes)}
+            />
+          ),
+        }}
+      />
       <Tabs.Screen
         name="swipe"
         options={{
           title: 'Match',
           tabBarIcon: ({ focused }) => (
             <TabIcon name={focused ? 'flame' : 'flame-outline'} focused={focused} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="likes"
-        options={{
-          title: 'Likes',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'heart' : 'heart-outline'}
-              focused={focused}
-              badge={formatBadge(counts.likes)}
-            />
           ),
         }}
       />

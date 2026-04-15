@@ -76,3 +76,13 @@ export async function sendMessageNotification(name: string, message: string): Pr
     trigger: null,
   });
 }
+
+export async function sendPushToUser(userId: string, title: string, body: string): Promise<void> {
+  const { data: profile } = await supabase.from('profiles').select('push_token').eq('id', userId).single();
+  if (!profile?.push_token) return;
+  await fetch('https://exp.host/--/api/v2/push/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to: profile.push_token, title, body, sound: 'default' }),
+  });
+}

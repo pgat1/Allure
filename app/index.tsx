@@ -1,4 +1,5 @@
 import { supabase } from '@/app/lib/supabase';
+import { initializePurchases, checkSubscriptionStatus } from '@/app/lib/purchases';
 import { useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
@@ -7,17 +8,19 @@ export default function SplashScreen() {
   const router = useRouter();
 
   useEffect(() => {
-    checkSession();
+    // Set up StoreKit listener once, then check session
+    initializePurchases().finally(() => checkSession());
   }, []);
 
   async function checkSession() {
     try {
       const { data } = await supabase.auth.getSession();
       if (data.session) {
-        // Already logged in — go straight to swipe
-        router.replace('/swipe');
+        // Sync subscription tier from Supabase → AsyncStorage so
+        // getUserTier() works correctly throughout the app session
+        await checkSubscriptionStatus();
+        router.replace('/(tabs)/swipe');
       } else {
-        // Not logged in — show auth screen
         router.replace('/auth');
       }
     } catch (err) {

@@ -1,5 +1,7 @@
 import { supabase } from '@/app/lib/supabase';
+import { useToast } from '@/app/lib/Toast';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -55,9 +57,9 @@ function ProgressBar({ step }: { step: number }) {
 
 export default function OnboardingScreen() {
   const router = useRouter();
+  const { showToast, toastJSX } = useToast();
   const [step, setStep] = useState(0);
   const [profilePicUri, setProfilePicUri] = useState<string | null>(null);
-  const [profilePicError, setProfilePicError] = useState(false);
   const [photos, setPhotos] = useState<(string | null)[]>([null, null, null, null, null, null]);
   const [bio, setBio] = useState('');
   const [interests, setInterests] = useState<string[]>([]);
@@ -73,7 +75,6 @@ export default function OnboardingScreen() {
     });
     if (!result.canceled && result.assets[0]) {
       setProfilePicUri(result.assets[0].uri);
-      setProfilePicError(false);
     }
   }
 
@@ -85,13 +86,20 @@ export default function OnboardingScreen() {
       quality: 0.85,
     });
     if (!result.canceled && result.assets[0]) {
-      setProfilePicUri(result.assets[0].uri);
-      setProfilePicError(false);
+      const flipped = await ImageManipulator.manipulateAsync(
+        result.assets[0].uri,
+        [{ flip: ImageManipulator.FlipType.Horizontal }],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      setProfilePicUri(flipped.uri);
     }
   }
 
   async function handleProfilePictureNext() {
-    if (!profilePicUri) { setProfilePicError(true); return; }
+    if (!profilePicUri) {
+      showToast('📸', 'Please add a profile picture to continue');
+      return;
+    }
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -108,10 +116,11 @@ export default function OnboardingScreen() {
       await supabase.from('profiles')
         .update({ profile_picture: urlData.publicUrl })
         .eq('id', user.id);
-      setStep(1);
     } catch {
+      showToast('⚠️', 'Photo upload failed', 'You can re-upload from your profile later');
     } finally {
       setLoading(false);
+      setStep(1);
     }
   }
 
@@ -223,10 +232,6 @@ export default function OnboardingScreen() {
           )}
         </TouchableOpacity>
 
-        {profilePicError && (
-          <Text style={s.errorTxt}>Add a profile picture to continue.</Text>
-        )}
-
         <View style={s.picBtnRow}>
           <TouchableOpacity style={s.picOptionBtn} onPress={takeProfileSelfie}>
             <Ionicons name="camera" size={18} color="#ff4d82" />
@@ -248,7 +253,12 @@ export default function OnboardingScreen() {
             : <Text style={s.btnTxt}>Continue</Text>
           }
         </TouchableOpacity>
+
+        <TouchableOpacity style={s.skipLinkBtn} onPress={() => setStep(1)} disabled={loading}>
+          <Text style={s.skipLinkTxt}>Skip for now</Text>
+        </TouchableOpacity>
       </ScrollView>
+      {toastJSX}
     </View>
   );
 
@@ -500,4 +510,6 @@ const s = StyleSheet.create({
 
   btn:             { backgroundColor: '#ff4d82', borderRadius: 50, paddingVertical: 18, alignItems: 'center' },
   btnTxt:          { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 1.5 },
+  skipLinkBtn:     { alignItems: 'center', marginTop: 16 },
+  skipLinkTxt:     { fontSize: 13, color: 'rgba(255,255,255,0.28)', fontWeight: '500' },
 });

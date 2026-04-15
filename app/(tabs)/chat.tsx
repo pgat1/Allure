@@ -1,5 +1,7 @@
 import { supabase } from '@/app/lib/supabase';
+import { clearMessagesBadge } from '@/app/lib/badgeCounts';
 import { sendMessageNotification } from '@/app/lib/notifications';
+import { getUserTier, UserTier } from '@/app/lib/subscription';
 import { useToast } from '@/app/lib/Toast';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -58,6 +60,7 @@ export default function ChatScreen() {
   const [wingmanLoading, setWingmanLoading] = useState(false);
   const [activeSub, setActiveSub]       = useState<any>(null);
   const [profileModal, setProfileModal] = useState(false);
+  const [tier, setTier]                 = useState<UserTier>('free');
   const [matchRowIds, setMatchRowIds]   = useState<Record<string, string>>({});
   const flatListRef = useRef<FlatList>(null);
   const screenRef   = useRef<'list' | 'convo'>('list');
@@ -68,6 +71,7 @@ export default function ChatScreen() {
     screenRef.current = screen;
   }, [screen]);
 
+  useEffect(() => { clearMessagesBadge(); }, []);
   useEffect(() => { init(); }, []);
 
   // Global subscription: notify for new messages when convo is NOT open
@@ -99,6 +103,8 @@ export default function ChatScreen() {
     const { data: userData } = await supabase.auth.getUser();
     if (!userData.user) return;
     setCurrentUser(userData.user);
+    const userTier = await getUserTier(userData.user.id);
+    setTier(userTier);
     await loadMatches(userData.user.id);
   }
 
@@ -164,6 +170,17 @@ export default function ChatScreen() {
             .eq('id', payload.new.id);
         }
       })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `match_id=eq.${matchRowId}`,
+      }, (payload) => {
+        // Update read flag on our sent messages so "Seen" renders
+        setMessages(prev =>
+          prev.map(m => m.id === payload.new.id ? { ...m, read: payload.new.read } : m)
+        );
+      })
       .subscribe();
     setActiveSub(sub);
   }
@@ -213,8 +230,12 @@ export default function ChatScreen() {
       content,
       created_at: new Date().toISOString(),
     };
+    // Optimistic insert first, then replace with DB row (which has id + read=false)
     setMessages(prev => [...prev, msg]);
-    await supabase.from('messages').insert(msg);
+    const { data: inserted } = await supabase.from('messages').insert(msg).select().single();
+    if (inserted) {
+      setMessages(prev => [...prev.slice(0, -1), inserted]);
+    }
   }
 
   async function getWingmanSuggestions() {
@@ -293,29 +314,47 @@ export default function ChatScreen() {
             <Text style={s.wingmanBtnTxt}>🪽 Wingman</Text>
           </TouchableOpacity>
         </View>
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(_, i) => i.toString()}
-          contentContainerStyle={s.messagesList}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-          ListEmptyComponent={
-            <View style={s.convoEmpty}>
-              <Text style={s.convoEmptyTxt}>No messages yet</Text>
-              <Text style={s.convoEmptySub}>Type something or use 🪽 Wingman!</Text>
-            </View>
+        {(() => {
+          // Index of the last message sent by me that has been read — used for "Seen"
+          let lastSentReadIdx = -1;
+          if (tier === 'plusplus') {
+            for (let i = messages.length - 1; i >= 0; i--) {
+              if (messages[i].sender_id === currentUser?.id && messages[i].read) {
+                lastSentReadIdx = i;
+                break;
+              }
+            }
           }
-          renderItem={({ item }) => {
-            const isMe = item.sender_id === currentUser?.id;
-            return (
-              <View style={[s.bubble, isMe ? s.bubbleMe : s.bubbleThem]}>
-                <Text style={[s.bubbleTxt, isMe ? s.bubbleTxtMe : s.bubbleTxtThem]}>
-                  {item.content}
-                </Text>
-              </View>
-            );
-          }}
-        />
+          return (
+            <FlatList
+              ref={flatListRef}
+              data={messages}
+              keyExtractor={(_, i) => i.toString()}
+              contentContainerStyle={s.messagesList}
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+              ListEmptyComponent={
+                <View style={s.convoEmpty}>
+                  <Text style={s.convoEmptyTxt}>No messages yet</Text>
+                  <Text style={s.convoEmptySub}>Type something or use 🪽 Wingman!</Text>
+                </View>
+              }
+              renderItem={({ item, index }) => {
+                const isMe = item.sender_id === currentUser?.id;
+                const showSeen = isMe && index === lastSentReadIdx;
+                return (
+                  <View style={isMe ? s.bubbleWrapMe : s.bubbleWrapThem}>
+                    <View style={[s.bubble, isMe ? s.bubbleMe : s.bubbleThem]}>
+                      <Text style={[s.bubbleTxt, isMe ? s.bubbleTxtMe : s.bubbleTxtThem]}>
+                        {item.content}
+                      </Text>
+                    </View>
+                    {showSeen && <Text style={s.seenLabel}>Seen</Text>}
+                  </View>
+                );
+              }}
+            />
+          );
+        })()}
         <View style={s.inputRow}>
           <TextInput
             style={s.input}
@@ -541,12 +580,15 @@ const s = StyleSheet.create({
   convoEmpty:     { alignItems:'center', marginTop:100, gap:8 },
   convoEmptyTxt:  { fontSize:16, color:'rgba(255,255,255,0.48)', fontWeight:'600' },
   convoEmptySub:  { fontSize:13, color:'rgba(255,255,255,0.3)' },
-  bubble:         { maxWidth:'75%', borderRadius:18, paddingHorizontal:14, paddingVertical:10, marginBottom:8 },
-  bubbleMe:       { alignSelf:'flex-end', backgroundColor:'#ff4d82' },
-  bubbleThem:     { alignSelf:'flex-start', backgroundColor:'rgba(255,255,255,0.11)', borderWidth:1, borderColor:'rgba(255,255,255,0.13)' },
+  bubbleWrapMe:   { alignSelf:'flex-end', alignItems:'flex-end', marginBottom:8 },
+  bubbleWrapThem: { alignSelf:'flex-start', alignItems:'flex-start', marginBottom:8 },
+  bubble:         { maxWidth:'75%', borderRadius:18, paddingHorizontal:14, paddingVertical:10 },
+  bubbleMe:       { backgroundColor:'#ff4d82' },
+  bubbleThem:     { backgroundColor:'rgba(255,255,255,0.11)', borderWidth:1, borderColor:'rgba(255,255,255,0.13)' },
   bubbleTxt:      { fontSize:14, lineHeight:20 },
   bubbleTxtMe:    { color:'#fff' },
   bubbleTxtThem:  { color:'rgba(255,255,255,0.9)' },
+  seenLabel:      { fontSize:11, color:'rgba(255,255,255,0.38)', fontStyle:'italic', marginTop:3, marginRight:4 },
   inputRow:       { flexDirection:'row', alignItems:'flex-end', gap:10, padding:12, paddingBottom:34, borderTopWidth:1, borderTopColor:'rgba(255,255,255,0.1)', backgroundColor:'rgba(10,0,5,0.85)' },
   input:          { flex:1, backgroundColor:'rgba(255,255,255,0.09)', borderRadius:20, paddingHorizontal:16, paddingVertical:10, fontSize:14, color:'#fff', borderWidth:1, borderColor:'rgba(255,255,255,0.13)', maxHeight:100 },
   sendBtn:        { width:42, height:42, borderRadius:21, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center' },

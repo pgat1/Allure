@@ -1,4 +1,5 @@
 import { supabase } from '@/app/lib/supabase';
+import { getUserTier, RESCAN_LIMIT } from '@/app/lib/subscription';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
@@ -215,18 +216,61 @@ export default function FaceScanScreen() {
 
       const { data: userData } = await supabase.auth.getUser();
       if (userData.user) {
-        const { data: existing } = await supabase
-          .from('profiles').select('score').eq('id', userData.user.id).single();
+        const userId   = userData.user.id;
+        const userTier = await getUserTier(userId);
+        const limit    = RESCAN_LIMIT[userTier];
 
-        if (!existing?.score || existing.score === 0) {
+        const { data: existing } = await supabase
+          .from('profiles')
+          .select('score, last_rescan, rescan_count_week')
+          .eq('id', userId)
+          .single();
+
+        const hasScore = existing?.score && existing.score > 0;
+
+        if (!hasScore) {
+          // First scan — always allowed
           await supabase.from('profiles')
-            .update({ score: finalScore, tier: t.name })
-            .eq('id', userData.user.id);
+            .update({ score: finalScore, tier: t.name, last_rescan: new Date().toISOString(), rescan_count_week: 1 })
+            .eq('id', userId);
           setScore(finalScore);
           setTier(t);
-        } else {
+        } else if (limit === 0) {
+          // Free users: score is locked
+          setErrorMsg('Upgrade to Allure+ to rescan your face.');
           setScore(existing.score);
           setTier(getTier(existing.score));
+          setPhase('result');
+          return;
+        } else {
+          // Paid users: check weekly rescan count
+          const now       = new Date();
+          const lastRescan = existing?.last_rescan ? new Date(existing.last_rescan) : null;
+          const msInWeek  = 7 * 24 * 60 * 60 * 1000;
+          const sameWeek  = lastRescan && (now.getTime() - lastRescan.getTime()) < msInWeek;
+          const weekCount = sameWeek ? (existing?.rescan_count_week || 0) : 0;
+
+          if (weekCount >= limit) {
+            const resetDate = lastRescan ? new Date(lastRescan.getTime() + msInWeek) : now;
+            const dd = String(resetDate.getDate()).padStart(2,'0');
+            const mm = String(resetDate.getMonth()+1).padStart(2,'0');
+            setErrorMsg(`Rescan limit reached (${limit}/week). Resets ${dd}/${mm}.`);
+            setScore(existing.score);
+            setTier(getTier(existing.score));
+            setPhase('result');
+            return;
+          }
+
+          await supabase.from('profiles')
+            .update({
+              score: finalScore,
+              tier: t.name,
+              last_rescan: now.toISOString(),
+              rescan_count_week: weekCount + 1,
+            })
+            .eq('id', userId);
+          setScore(finalScore);
+          setTier(t);
         }
       }
 
@@ -265,7 +309,8 @@ export default function FaceScanScreen() {
         <Text style={s.tipsTxt}>Bright even lighting</Text>
         <Text style={s.tipsTxt}>No sunglasses or hats</Text>
         <Text style={s.tipsTxt}>Hold still — no blur</Text>
-        <Text style={s.tipsTxt}>Score is permanent after first scan</Text>
+        <Text style={s.tipsTxt}>Free: score locks after first scan</Text>
+        <Text style={s.tipsTxt}>Allure+: 1 rescan/week · Allure++: 3/week</Text>
       </View>
 
       <View style={s.tierRow}>
@@ -402,12 +447,21 @@ export default function FaceScanScreen() {
         </View>
       </View>
 
-      <View style={s.lockedBox}>
-        <Text style={s.lockedTxt}>
-          🔒 Your score is permanently locked at {score}.
-          This ensures fairness for everyone on Allure.
-        </Text>
-      </View>
+      {errorMsg ? (
+        <View style={s.upgradeBox}>
+          <Text style={s.upgradeBoxTxt}>{errorMsg}</Text>
+          <TouchableOpacity style={s.upgradeBoxBtn} onPress={() => router.push('/subscription')}>
+            <Text style={s.upgradeBoxBtnTxt}>Upgrade to Allure+</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={s.lockedBox}>
+          <Text style={s.lockedTxt}>
+            🔒 Your score is permanently locked at {score}.
+            This ensures fairness for everyone on Allure.
+          </Text>
+        </View>
+      )}
 
       <TouchableOpacity style={s.btn} onPress={() => router.replace('/swipe')}>
         <Text style={s.btnTxt}>Start Matching ✨</Text>
@@ -470,5 +524,9 @@ const s = StyleSheet.create({
   statL:        { fontSize:10, color:'rgba(255,255,255,0.3)', marginTop:2, textTransform:'uppercase', letterSpacing:.5 },
   lockedBox:    { backgroundColor:'rgba(255,255,255,0.04)', borderRadius:12, padding:14, marginBottom:20, borderWidth:1, borderColor:'rgba(255,255,255,0.08)', width:'100%' },
   lockedTxt:    { fontSize:12, color:'rgba(255,255,255,0.4)', textAlign:'center', lineHeight:18 },
+  upgradeBox:   { backgroundColor:'rgba(255,77,130,0.08)', borderRadius:12, padding:16, marginBottom:20, borderWidth:1, borderColor:'rgba(255,77,130,0.25)', width:'100%', alignItems:'center', gap:12 },
+  upgradeBoxTxt:{ fontSize:13, color:'rgba(255,255,255,0.6)', textAlign:'center', lineHeight:18 },
+  upgradeBoxBtn:{ backgroundColor:'#ff4d82', borderRadius:12, paddingVertical:11, paddingHorizontal:24 },
+  upgradeBoxBtnTxt:{ color:'#fff', fontSize:14, fontWeight:'700' },
   backBtn:      { position:'absolute', top:54, left:16, width:38, height:38, borderRadius:19, backgroundColor:'rgba(0,0,0,0.45)', alignItems:'center', justifyContent:'center' },
 });

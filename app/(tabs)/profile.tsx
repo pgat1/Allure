@@ -428,6 +428,13 @@ export default function ProfileScreen() {
             <Text style={s.listRowTxt}>Rescan My Face</Text>
             <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
           </TouchableOpacity>
+          <View style={s.rowDivider} />
+
+          {/* Terms of Service */}
+          <TouchableOpacity style={s.listRow} onPress={() => router.push('/terms')}>
+            <Text style={s.listRowTxt}>Terms of Service</Text>
+            <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
+          </TouchableOpacity>
 
           <View style={s.divider} />
 

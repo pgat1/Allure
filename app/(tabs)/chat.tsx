@@ -62,6 +62,7 @@ export default function ChatScreen() {
   const [profileModal, setProfileModal] = useState(false);
   const [tier, setTier]                 = useState<UserTier>('free');
   const [matchRowIds, setMatchRowIds]   = useState<Record<string, string>>({});
+  const [lastMessages, setLastMessages] = useState<Record<string, any>>({});
   const flatListRef = useRef<FlatList>(null);
   const screenRef   = useRef<'list' | 'convo'>('list');
   const matchesRef  = useRef<any[]>([]);
@@ -99,6 +100,19 @@ export default function ChatScreen() {
     return () => { subs.forEach(s => s.unsubscribe()); };
   }, [currentUser?.id, matchRowIds]);
 
+  function formatMatchTime(isoStr: string): string {
+    if (!isoStr) return '';
+    const date = new Date(isoStr);
+    const now = new Date();
+    if (date.toDateString() === now.toDateString()) {
+      return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    if (now.getTime() - date.getTime() < 7 * 24 * 60 * 60 * 1000) {
+      return date.toLocaleDateString([], { weekday: 'short' });
+    }
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+
   async function init() {
     const { data: userData } = await supabase.auth.getUser();
     if (!userData.user) return;
@@ -126,6 +140,19 @@ export default function ChatScreen() {
       const profiles = matchProfiles || [];
       setMatches(profiles);
       matchesRef.current = profiles;
+
+      // Fetch last message for each match
+      const matchRowIdValues = Object.values(rowIds);
+      const { data: lastMsgsData } = await supabase
+        .from('messages')
+        .select('match_id, content, created_at, sender_id, read')
+        .in('match_id', matchRowIdValues)
+        .order('created_at', { ascending: false });
+      const lastMsgMap: Record<string, any> = {};
+      for (const msg of lastMsgsData || []) {
+        if (!lastMsgMap[msg.match_id]) lastMsgMap[msg.match_id] = msg;
+      }
+      setLastMessages(lastMsgMap);
     }
     setLoading(false);
   }
@@ -255,7 +282,7 @@ export default function ChatScreen() {
           max_tokens: 1000,
           messages: [{
             role: 'user',
-            content: `You are Wingman, an AI for the dating app Allure. Generate 3 short, fun, confident conversation starters to send to ${activeMatch?.name}. Make them flirty but not creepy, unique, and not generic. Return ONLY a JSON array of 3 strings, nothing else.`,
+            content: `You are Wingman, an AI assistant for the dating app Allure. Based on the conversation with ${activeMatch?.name}, generate 3 short message suggestions. Make them sound natural and confident — like something a cool, self-assured person would actually say. No cheesy pickup lines, no over-the-top compliments. Keep them short (under 15 words each), casual, and genuine. Vary the tone — one playful, one curious, one bold. Return ONLY a JSON array of 3 strings, no other text.`,
           }],
         }),
       });
@@ -311,7 +338,7 @@ export default function ChatScreen() {
             <Text style={s.convoName}>{activeMatch.name}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={s.wingmanBtn} onPress={getWingmanSuggestions}>
-            <Text style={s.wingmanBtnTxt}>🪽 Wingman</Text>
+            <Text style={s.wingmanBtnTxt}>🪽</Text>
           </TouchableOpacity>
         </View>
         {(() => {
@@ -341,14 +368,24 @@ export default function ChatScreen() {
               renderItem={({ item, index }) => {
                 const isMe = item.sender_id === currentUser?.id;
                 const showSeen = isMe && index === lastSentReadIdx;
+                const prevMsg = messages[index - 1];
+                const nextMsg = messages[index + 1];
+                const isFirstInGroup = !prevMsg || prevMsg.sender_id !== item.sender_id;
+                const isLastInGroup = !nextMsg || nextMsg.sender_id !== item.sender_id;
                 return (
-                  <View style={isMe ? s.bubbleWrapMe : s.bubbleWrapThem}>
+                  <View style={[
+                    isMe ? s.bubbleWrapMe : s.bubbleWrapThem,
+                    !isFirstInGroup && s.bubbleWrapCondensed,
+                  ]}>
                     <View style={[s.bubble, isMe ? s.bubbleMe : s.bubbleThem]}>
                       <Text style={[s.bubbleTxt, isMe ? s.bubbleTxtMe : s.bubbleTxtThem]}>
                         {item.content}
                       </Text>
                     </View>
                     {showSeen && <Text style={s.seenLabel}>Seen</Text>}
+                    {isLastInGroup && item.created_at ? (
+                      <Text style={s.groupTimestamp}>{formatMatchTime(item.created_at)}</Text>
+                    ) : null}
                   </View>
                 );
               }}
@@ -516,6 +553,8 @@ export default function ChatScreen() {
           ItemSeparatorComponent={() => <View style={s.separator} />}
           renderItem={({ item }) => {
             const tierColor = getTierColor(item.tier);
+            const lastMsg = lastMessages[matchRowIds[item.id]];
+            const isUnread = lastMsg && lastMsg.sender_id !== currentUser?.id && !lastMsg.read;
             return (
               <TouchableOpacity style={s.row} activeOpacity={0.7} onPress={() => openConvo(item)}>
                 <View style={s.avatarWrap}>
@@ -530,11 +569,13 @@ export default function ChatScreen() {
                 </View>
                 <View style={s.rowContent}>
                   <View style={s.rowTop}>
-                    <Text style={s.rowName}>{item.name}</Text>
-                    <Text style={s.wingmanTag}>🪽 Wingman AI</Text>
+                    <Text style={[s.rowName, isUnread && s.rowNameUnread]}>{item.name}</Text>
+                    <Text style={s.rowTime}>{lastMsg ? formatMatchTime(lastMsg.created_at) : ''}</Text>
                   </View>
-                  <Text style={s.rowPreview} numberOfLines={1}>
-                    Tap to chat with {item.name?.split(' ')[0]}!
+                  <Text style={[s.rowPreview, isUnread && s.rowPreviewUnread]} numberOfLines={1}>
+                    {lastMsg
+                      ? (lastMsg.sender_id === currentUser?.id ? 'You: ' : '') + lastMsg.content
+                      : `Start a conversation with ${item.name?.split(' ')[0]}!`}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -566,22 +607,27 @@ const s = StyleSheet.create({
   tierDot:        { position:'absolute', bottom:1, right:1, width:10, height:10, borderRadius:5, borderWidth:1.5, borderColor:'#000' },
   rowContent:     { flex:1 },
   rowTop:         { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:4 },
-  rowName:        { fontSize:15, fontWeight:'700', color:'#fff' },
+  rowName:        { fontSize:15, fontWeight:'400', color:'rgba(255,255,255,0.75)' },
+  rowNameUnread:  { fontWeight:'700', color:'#fff' },
+  rowTime:        { fontSize:11, color:'rgba(255,255,255,0.3)' },
+  rowPreview:     { fontSize:13, color:'rgba(255,255,255,0.4)' },
+  rowPreviewUnread: { color:'rgba(255,255,255,0.7)', fontWeight:'500' },
   wingmanTag:     { fontSize:11, color:'#ff4d82', fontWeight:'600' },
-  rowPreview:     { fontSize:13, color:'rgba(255,255,255,0.52)' },
   convoHeader:       { flexDirection:'row', alignItems:'center', justifyContent:'space-between', paddingHorizontal:16, paddingTop:54, paddingBottom:12, borderBottomWidth:1, borderBottomColor:'rgba(255,255,255,0.1)' },
   convoHeaderCenter: { flexDirection:'row', alignItems:'center', gap:8 },
   convoAvatar:       { width:32, height:32, borderRadius:16, borderWidth:1.5, borderColor:'#ff4d82' },
   convoAvatarEmpty:  { width:32, height:32, borderRadius:16, backgroundColor:'rgba(255,255,255,0.08)', alignItems:'center', justifyContent:'center', borderWidth:1.5, borderColor:'#ff4d82' },
   convoName:         { fontSize:17, fontWeight:'700', color:'#fff' },
-  wingmanBtn:     { backgroundColor:'rgba(255,77,130,0.15)', borderRadius:50, paddingHorizontal:14, paddingVertical:7, borderWidth:1, borderColor:'rgba(255,77,130,0.3)' },
-  wingmanBtnTxt:  { fontSize:13, color:'#ff4d82', fontWeight:'700' },
+  wingmanBtn:     { width:36, height:36, borderRadius:18, backgroundColor:'rgba(255,77,130,0.15)', alignItems:'center', justifyContent:'center', borderWidth:1, borderColor:'rgba(255,77,130,0.3)' },
+  wingmanBtnTxt:  { fontSize:16 },
   messagesList:   { padding:16, paddingBottom:20, flexGrow:1 },
   convoEmpty:     { alignItems:'center', marginTop:100, gap:8 },
   convoEmptyTxt:  { fontSize:16, color:'rgba(255,255,255,0.48)', fontWeight:'600' },
   convoEmptySub:  { fontSize:13, color:'rgba(255,255,255,0.3)' },
-  bubbleWrapMe:   { alignSelf:'flex-end', alignItems:'flex-end', marginBottom:8 },
-  bubbleWrapThem: { alignSelf:'flex-start', alignItems:'flex-start', marginBottom:8 },
+  bubbleWrapMe:        { alignSelf:'flex-end', alignItems:'flex-end', marginBottom:8 },
+  bubbleWrapThem:      { alignSelf:'flex-start', alignItems:'flex-start', marginBottom:8 },
+  bubbleWrapCondensed: { marginBottom:2 },
+  groupTimestamp:      { fontSize:10, color:'rgba(255,255,255,0.3)', fontStyle:'italic', marginTop:4, marginHorizontal:4 },
   bubble:         { maxWidth:'75%', borderRadius:18, paddingHorizontal:14, paddingVertical:10 },
   bubbleMe:       { backgroundColor:'#ff4d82' },
   bubbleThem:     { backgroundColor:'rgba(255,255,255,0.11)', borderWidth:1, borderColor:'rgba(255,255,255,0.13)' },
@@ -589,9 +635,9 @@ const s = StyleSheet.create({
   bubbleTxtMe:    { color:'#fff' },
   bubbleTxtThem:  { color:'rgba(255,255,255,0.9)' },
   seenLabel:      { fontSize:11, color:'rgba(255,255,255,0.38)', fontStyle:'italic', marginTop:3, marginRight:4 },
-  inputRow:       { flexDirection:'row', alignItems:'flex-end', gap:10, padding:12, paddingBottom:34, borderTopWidth:1, borderTopColor:'rgba(255,255,255,0.1)', backgroundColor:'rgba(10,0,5,0.85)' },
+  inputRow:       { flexDirection:'row', alignItems:'flex-end', gap:10, padding:12, paddingBottom:34, borderTopWidth:1, borderTopColor:'rgba(255,255,255,0.08)', backgroundColor:'rgba(10,0,5,0.85)' },
   input:          { flex:1, backgroundColor:'rgba(255,255,255,0.09)', borderRadius:20, paddingHorizontal:16, paddingVertical:10, fontSize:14, color:'#fff', borderWidth:1, borderColor:'rgba(255,255,255,0.13)', maxHeight:100 },
-  sendBtn:        { width:42, height:42, borderRadius:21, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center' },
+  sendBtn:        { width:46, height:46, borderRadius:23, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center' },
   modalOverlay:   { flex:1, backgroundColor:'rgba(0,0,0,0.9)', justifyContent:'flex-end' },
   modalCard:      { backgroundColor:'#1e0012', borderRadius:24, padding:22, borderWidth:1, borderColor:'rgba(255,255,255,0.12)' },
   modalHeader:    { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:6 },

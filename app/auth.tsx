@@ -1,6 +1,7 @@
 import { supabase } from '@/app/lib/supabase';
 import { registerForPushNotifications } from '@/app/lib/notifications';
 import { useToast } from '@/app/lib/Toast';
+import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -26,6 +27,7 @@ export default function AuthScreen() {
   const [password, setPassword]   = useState('');
   const [birthday, setBirthday]   = useState('');
   const [loading, setLoading]     = useState(false);
+  const [tosChecked, setTosChecked] = useState(false);
 
   function calculateAge(birthdayStr: string): number {
     const today = new Date();
@@ -67,6 +69,10 @@ export default function AuthScreen() {
       );
       if (age < 18) {
         showToast('🔞', 'Must be 18+', 'You must be 18 or older to use Allure.');
+        return;
+      }
+      if (!tosChecked) {
+        showToast('📋', 'Please agree to the Terms of Service to continue');
         return;
       }
     }
@@ -209,6 +215,19 @@ export default function AuthScreen() {
               secureTextEntry
             />
           </View>
+
+          {isSignUp && (
+            <TouchableOpacity style={s.tosRow} onPress={() => setTosChecked(v => !v)} activeOpacity={0.7}>
+              <View style={[s.checkbox, tosChecked && s.checkboxChecked]}>
+                {tosChecked && <Ionicons name="checkmark" size={13} color="#fff" />}
+              </View>
+              <Text style={s.tosText}>
+                I agree to the{' '}
+                <Text style={s.tosLink} onPress={() => router.push('/terms')}>Terms of Service</Text>
+                {' '}and confirm I am 18 or older
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Submit */}
@@ -254,7 +273,12 @@ const s = StyleSheet.create({
   input:      { fontSize: 15, color: '#fff', borderBottomWidth: 1, borderBottomColor: 'rgba(255,77,130,0.3)', paddingVertical: 10, paddingHorizontal: 0 },
   btn:        { backgroundColor: '#ff4d82', borderRadius: 50, paddingVertical: 18, alignItems: 'center', marginBottom: 22 },
   btnTxt:     { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 1.5 },
-  toggle:     { textAlign: 'center', fontSize: 13, color: 'rgba(255,255,255,0.25)', marginBottom: 22 },
-  toggleLink: { color: 'rgba(255,100,150,0.85)', fontWeight: '600' },
-  terms:      { fontSize: 10, color: 'rgba(255,255,255,0.14)', textAlign: 'center', lineHeight: 17, letterSpacing: 0.3 },
+  toggle:          { textAlign: 'center', fontSize: 13, color: 'rgba(255,255,255,0.25)', marginBottom: 22 },
+  toggleLink:      { color: 'rgba(255,100,150,0.85)', fontWeight: '600' },
+  terms:           { fontSize: 10, color: 'rgba(255,255,255,0.14)', textAlign: 'center', lineHeight: 17, letterSpacing: 0.3 },
+  tosRow:          { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  checkbox:        { width: 20, height: 20, borderRadius: 4, borderWidth: 1.5, borderColor: 'rgba(255,77,130,0.5)', alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0 },
+  checkboxChecked: { backgroundColor: '#ff4d82', borderColor: '#ff4d82' },
+  tosText:         { flex: 1, fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: 20 },
+  tosLink:         { color: '#4d9fff', textDecorationLine: 'underline' },
 });

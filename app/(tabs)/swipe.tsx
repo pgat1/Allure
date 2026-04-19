@@ -14,6 +14,7 @@ import {
   Dimensions,
   Image,
   Modal,
+  PanResponder,
   ScrollView,
   StyleSheet,
   Text,
@@ -51,6 +52,55 @@ export default function SwipeScreen() {
     inputRange: [-width / 4, 0],
     outputRange: [1, 0],
   });
+
+  // Mutable ref so panResponder always calls the latest closure
+  const swipeAction = useRef<(dir: 'left' | 'right') => Promise<void>>(async () => {});
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, { dx, dy }) =>
+        Math.abs(dx) > Math.abs(dy) + 4 && Math.abs(dx) > 8,
+      onPanResponderMove: Animated.event(
+        [null, { dx: swipeAnim.x, dy: swipeAnim.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: (_, { dx, dy }) => {
+        if (dx > 100) {
+          Animated.timing(swipeAnim, {
+            toValue: { x: width + 100, y: dy },
+            duration: 300,
+            useNativeDriver: false,
+          }).start(() => {
+            swipeAnim.setValue({ x: 0, y: 0 });
+            swipeAction.current('right');
+          });
+        } else if (dx < -100) {
+          Animated.timing(swipeAnim, {
+            toValue: { x: -width - 100, y: dy },
+            duration: 300,
+            useNativeDriver: false,
+          }).start(() => {
+            swipeAnim.setValue({ x: 0, y: 0 });
+            swipeAction.current('left');
+          });
+        } else {
+          Animated.spring(swipeAnim, {
+            toValue: { x: 0, y: 0 },
+            useNativeDriver: false,
+            friction: 5,
+            tension: 40,
+          }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(swipeAnim, {
+          toValue: { x: 0, y: 0 },
+          useNativeDriver: false,
+        }).start();
+      },
+    })
+  ).current;
 
   useEffect(() => { loadProfiles(); }, []);
 
@@ -112,34 +162,39 @@ export default function SwipeScreen() {
     }
   }
 
+  // Updated every render so panResponder always gets a fresh closure
+  swipeAction.current = async (direction: 'left' | 'right') => {
+    if (profiles.length === 0 || !currentUser) return;
+    const current = profiles[0];
+    setLastAction(direction === 'right' ? '❤️ Liked!' : '✕ Passed');
+    setProfiles(prev => prev.slice(1));
+    setTimeout(() => setLastAction(null), 1000);
+
+    if (direction === 'right') {
+      await supabase.from('likes').insert({ from_user: currentUser.id, to_user: current.id });
+      const { data: theirLike } = await supabase
+        .from('likes').select('*')
+        .eq('from_user', current.id)
+        .eq('to_user', currentUser.id)
+        .single();
+      if (theirLike) {
+        await supabase.from('matches').insert({ user1_id: currentUser.id, user2_id: current.id });
+        setMatchPopup(current);
+        await sendMatchNotification(current.name?.split(' ')[0] || current.name);
+      }
+    }
+  };
+
   async function handleSwipe(direction: 'left' | 'right') {
     if (profiles.length === 0) return;
-    const current = profiles[0];
     const x = direction === 'right' ? width + 100 : -width - 100;
-    setLastAction(direction === 'right' ? '❤️ Liked!' : '✕ Passed');
-
     Animated.timing(swipeAnim, {
       toValue: { x, y: 0 },
       duration: 350,
-      useNativeDriver: true,
-    }).start(async () => {
+      useNativeDriver: false,
+    }).start(() => {
       swipeAnim.setValue({ x: 0, y: 0 });
-      setProfiles(prev => prev.slice(1));
-      setTimeout(() => setLastAction(null), 1000);
-
-      if (direction === 'right' && currentUser) {
-        await supabase.from('likes').insert({ from_user: currentUser.id, to_user: current.id });
-        const { data: theirLike } = await supabase
-          .from('likes').select('*')
-          .eq('from_user', current.id)
-          .eq('to_user', currentUser.id)
-          .single();
-        if (theirLike) {
-          await supabase.from('matches').insert({ user1_id: currentUser.id, user2_id: current.id });
-          setMatchPopup(current);
-          await sendMatchNotification(current.name?.split(' ')[0] || current.name);
-        }
-      }
+      swipeAction.current(direction);
     });
   }
 
@@ -264,19 +319,22 @@ export default function SwipeScreen() {
       <LinearGradient colors={['#2a0018','#150010','#0a0005']} style={StyleSheet.absoluteFillObject} />
 
       {/* Swipeable card */}
-      <Animated.View style={[s.photoCard, {
-        transform: [
-          { translateX: swipeAnim.x },
-          { translateY: swipeAnim.y },
-          { rotate: rotateAnim },
-        ],
-      }]}>
+      <Animated.View
+        style={[s.photoCard, {
+          transform: [
+            { translateX: swipeAnim.x },
+            { translateY: swipeAnim.y },
+            { rotate: rotateAnim },
+          ],
+        }]}
+        {...panResponder.panHandlers}
+      >
         {/* LIKE / NOPE stamps */}
         <Animated.View style={[s.likeStamp, { opacity: likeOpacity }]}>
-          <Text style={s.likeStampTxt}>LIKE</Text>
+          <Text style={s.likeStampTxt}>❤</Text>
         </Animated.View>
         <Animated.View style={[s.nopeStamp, { opacity: nopeOpacity }]}>
-          <Text style={s.nopeStampTxt}>NOPE</Text>
+          <Text style={s.nopeStampTxt}>✕</Text>
         </Animated.View>
 
         <ScrollView bounces={false} showsVerticalScrollIndicator={false}>

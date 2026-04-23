@@ -58,26 +58,26 @@ export default function AuthScreen() {
 
   async function handleSubmit() {
     if (isSignUp) {
-      if (!firstName.trim()) { showToast('⚠️', 'First name required'); return; }
-      if (!lastName.trim())  { showToast('⚠️', 'Last name required'); return; }
+      if (!firstName.trim()) { showToast('First name required'); return; }
+      if (!lastName.trim())  { showToast('Last name required'); return; }
       if (!birthday.trim() || birthday.length < 10) {
-        showToast('📅', 'Birthday required', 'Format: MM/DD/YYYY');
+        showToast('Birthday required — MM/DD/YYYY');
         return;
       }
       const age = calculateAge(
         `${birthday.slice(6, 10)}-${birthday.slice(0, 2)}-${birthday.slice(3, 5)}`
       );
       if (age < 18) {
-        showToast('🔞', 'Must be 18+', 'You must be 18 or older to use Allure.');
+        showToast('You must be 18 or older to use Allure');
         return;
       }
       if (!tosChecked) {
-        showToast('📋', 'Please agree to the Terms of Service to continue');
+        showToast('Please agree to the Terms of Service');
         return;
       }
     }
-    if (!email.trim())        { showToast('⚠️', 'Email required'); return; }
-    if (password.length < 6)  { showToast('⚠️', 'Password too short', 'At least 6 characters required'); return; }
+    if (!email.trim())        { showToast('Email required'); return; }
+    if (password.length < 6)  { showToast('Password must be at least 6 characters'); return; }
 
     setLoading(true);
     try {
@@ -116,7 +116,7 @@ export default function AuthScreen() {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) {
           if (error.code === 'invalid_credentials' || error.code === 'user_not_found') {
-            showToast('❌', 'Account not found', 'No account found with this email. Please sign up first.');
+            showToast('No account found with this email — please sign up');
             return;
           }
           throw error;
@@ -125,7 +125,7 @@ export default function AuthScreen() {
         router.push('/swipe');
       }
     } catch (err: any) {
-      showToast('❌', 'Something went wrong', err.message);
+      showToast(err.message || 'Something went wrong');
     } finally {
       setLoading(false);
     }

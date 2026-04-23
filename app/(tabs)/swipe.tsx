@@ -114,6 +114,12 @@ export default function SwipeScreen() {
       const userTier = await getUserTier(userData.user.id);
       setTier(userTier);
 
+      // Update last_active so other users can see we're online
+      await supabase
+        .from('profiles')
+        .update({ last_active: new Date().toISOString() })
+        .eq('id', userData.user.id);
+
       const { data: myProfile } = await supabase
         .from('profiles')
         .select('name, subscription_tier, boost_expires_at')
@@ -180,7 +186,18 @@ export default function SwipeScreen() {
       if (theirLike) {
         await supabase.from('matches').insert({ user1_id: currentUser.id, user2_id: current.id });
         setMatchPopup(current);
+        // Notify the current user (local confirmation)
         await sendMatchNotification(current.name?.split(' ')[0] || current.name);
+        // Notify the other user only if they haven't been active in the last 5 minutes
+        const { data: otherProfile } = await supabase
+          .from('profiles').select('last_active').eq('id', current.id).single();
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const otherLastActive = otherProfile?.last_active ? new Date(otherProfile.last_active) : null;
+        const isOffline = !otherLastActive || otherLastActive < fiveMinutesAgo;
+        if (isOffline) {
+          const myFirstName = currentUserName || 'Someone';
+          await sendPushToUser(current.id, `💞 It's a Match! You and ${myFirstName} matched on Allure!`, '');
+        }
       }
     }
   };
@@ -217,7 +234,7 @@ export default function SwipeScreen() {
       const count  = parsed.date === today ? parsed.count : 0;
 
       if (count >= limit) {
-        showToast('⏳', `You've used all ${limit} crushes today. Resets tomorrow!`);
+        showToast(`You've used all ${limit} crushes today — resets tomorrow`);
         return;
       }
 
@@ -229,7 +246,6 @@ export default function SwipeScreen() {
     await supabase.from('likes').insert({ from_user: currentUser.id, to_user: current.id, comment: 'crush' });
     const senderName = currentUserName || 'Someone';
     await sendPushToUser(current.id, `${senderName} has a crush on you 💗`, '');
-    showToast('💗', 'Crush sent!');
     setProfiles(prev => prev.slice(1));
   }
 
@@ -290,7 +306,7 @@ export default function SwipeScreen() {
         ? <Image source={{ uri: matchPopup.profile_picture }} style={s.matchPhoto} resizeMode="cover" />
         : <View style={s.matchAvatarEmpty}><Ionicons name="person" size={50} color="rgba(255,255,255,0.3)" /></View>
       }
-      <Text style={s.matchName}>You and {matchPopup.name} liked each other!</Text>
+      <Text style={s.matchName}>You and {matchPopup.name?.split(' ')[0]} liked each other!</Text>
       <TouchableOpacity style={s.matchBtn} onPress={() => setMatchPopup(null)}>
         <Text style={s.matchBtnTxt}>Keep Swiping 🔥</Text>
       </TouchableOpacity>
@@ -339,75 +355,47 @@ export default function SwipeScreen() {
 
         <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
 
-          {/* ── First photo: full screen ── */}
-          <View style={s.mainPhotoWrap}>
-            {photos[0] ? (
-              <Image source={{ uri: photos[0] }} style={s.mainPhoto} resizeMode="cover" />
-            ) : (
-              <View style={s.mainPhotoEmpty}>
-                <LinearGradient colors={['#2a0018','#150010','#0a0005']} style={StyleSheet.absoluteFillObject} />
-                <Ionicons name="person" size={90} color="rgba(255,255,255,0.08)" />
-              </View>
-            )}
+          {/* ── All photos stacked, each full-screen height ── */}
+          {photos.length > 0 ? photos.map((url: string, i: number) => (
+            <Image key={i} source={{ uri: url }} style={s.stackedPhoto} resizeMode="cover" />
+          )) : (
+            <View style={s.mainPhotoEmpty}>
+              <LinearGradient colors={['#2a0018','#150010','#0a0005']} style={StyleSheet.absoluteFillObject} />
+              <Ionicons name="person" size={90} color="rgba(255,255,255,0.08)" />
+            </View>
+          )}
 
-            {/* Tap hint — full profile */}
-            <TouchableOpacity
-              activeOpacity={0.95}
-              onPress={() => setRevealModal(current)}
-              style={s.tapHintOverlay}
-            >
-              <Ionicons name="chevron-up" size={13} color="rgba(255,255,255,0.55)" />
-              <Text style={s.tapHintTxt}>Tap for full profile</Text>
-            </TouchableOpacity>
-
-            {/* Scroll-down arrow */}
-            {photos.length > 1 && (
-              <View style={s.scrollHint} pointerEvents="none">
-                <Ionicons name="chevron-down" size={16} color="rgba(255,255,255,0.5)" />
-              </View>
-            )}
-          </View>
-
-          {/* ── Separator after main photo ── */}
-          <View style={s.separator} />
-
-          {/* ── Bio box (between photo 0 and photo 1) ── */}
+          {/* ── Bio ── */}
           {current.bio ? (
             <>
+              <View style={s.separator} />
               <LinearGradient colors={['rgba(26,8,24,0.95)', 'rgba(13,0,8,1)']} style={s.infoBox}>
                 <Text style={s.infoBoxLabel}>BIO</Text>
                 <Text style={s.infoBoxText}>{current.bio}</Text>
                 <View style={s.infoBoxDivider} />
               </LinearGradient>
-              <View style={s.separator} />
             </>
           ) : null}
 
-          {/* ── Additional photos with interest boxes between them ── */}
-          {photos.slice(1).map((url: string, i: number) => (
-            <View key={i}>
-              {i > 0 && <View style={s.separator} />}
-              <Image source={{ uri: url }} style={s.extraPhoto} resizeMode="cover" />
-              {current.interests?.[i] && (
-                <>
-                  <View style={s.separator} />
-                  <LinearGradient colors={['rgba(26,8,24,0.95)', 'rgba(13,0,8,1)']} style={s.infoBox}>
-                    <Text style={s.infoBoxLabel}>INTERESTS</Text>
-                    <View style={s.infoBoxInterests}>
-                      {current.interests.slice(i, i + 3).map((int: any, j: number) => (
-                        <View key={j} style={s.infoBoxPill}>
-                          <Text style={s.infoBoxPillTxt}>{int.emoji} {int.label}</Text>
-                        </View>
-                      ))}
+          {/* ── Interests ── */}
+          {current.interests?.length > 0 ? (
+            <>
+              <View style={s.separator} />
+              <LinearGradient colors={['rgba(26,8,24,0.95)', 'rgba(13,0,8,1)']} style={s.infoBox}>
+                <Text style={s.infoBoxLabel}>INTERESTS</Text>
+                <View style={s.infoBoxInterests}>
+                  {current.interests.map((int: any, j: number) => (
+                    <View key={j} style={s.infoBoxPill}>
+                      <Text style={s.infoBoxPillTxt}>{int.emoji} {int.label}</Text>
                     </View>
-                    <View style={s.infoBoxDivider} />
-                  </LinearGradient>
-                </>
-              )}
-            </View>
-          ))}
+                  ))}
+                </View>
+                <View style={s.infoBoxDivider} />
+              </LinearGradient>
+            </>
+          ) : null}
 
-          {/* Spacer so last photo isn't hidden behind buttons */}
+          {/* Spacer so last section isn't hidden behind buttons */}
           <View style={{ height: 200 }} />
         </ScrollView>
       </Animated.View>
@@ -422,10 +410,7 @@ export default function SwipeScreen() {
         <View style={s.topInfoBackdrop}>
           <View style={s.topInfoRow}>
             <View style={s.topInfoTextCol}>
-              <Text style={s.topInfoName} numberOfLines={1}>{current.name}, {current.age || '?'}</Text>
-              <Text style={s.topInfoSub} numberOfLines={1}>
-                {current.location || (current.bio ? current.bio.slice(0, 50) : '')}
-              </Text>
+              <Text style={s.topInfoName} numberOfLines={1}>{current.name?.split(' ')[0]}, {current.age || '?'}</Text>
             </View>
             <View style={[s.topInfoTierCircle, { borderColor: tierColor }]}>
               <Text style={{ color: tierColor, fontSize: 14 }}>{getTierEmoji(current.tier)}</Text>
@@ -526,7 +511,7 @@ export default function SwipeScreen() {
               )}
               <View style={s.revealBody}>
                 <View style={s.revealNameRow}>
-                  <Text style={s.revealName}>{revealModal?.name}, {revealModal?.age}</Text>
+                  <Text style={s.revealName}>{revealModal?.name?.split(' ')[0]}, {revealModal?.age}</Text>
                   <View style={[s.revealTierPill, { borderColor:`${getTierColor(revealModal?.tier)}60`, backgroundColor:`${getTierColor(revealModal?.tier)}15` }]}>
                     <Text style={[s.revealTierTxt, { color: getTierColor(revealModal?.tier) }]}>
                       {getTierEmoji(revealModal?.tier)} {revealModal?.tier}
@@ -640,6 +625,7 @@ const s = StyleSheet.create({
   nopeStampTxt:       { fontSize:28, fontWeight:'900', color:'#ff4d6d', letterSpacing:2 },
 
   // ── Extra photos (scrolled) ──
+  stackedPhoto:       { width, height },
   extraPhoto:         { width, height: width * 1.25, borderTopWidth:1, borderTopColor:'rgba(255,255,255,0.06)' },
 
   // ── Action badge ──

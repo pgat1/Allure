@@ -78,6 +78,31 @@ const KNOW_ME_FIELDS = [
   { key:'social_media',     label:'Social Media',    emoji:'📱', type:'select', options:['Very Active','Sometimes','Rarely','Not on Social Media'] },
 ];
 
+const PERSONAL_FIELDS = [
+  { key:'height',      label:'Height',          emoji:'📏', type:'text',   placeholder:"e.g. 5'11\"" },
+  { key:'ethnicity',   label:'Race/Ethnicity',  emoji:'🌎', type:'select', options:['White','Black','Hispanic','Asian','Middle Eastern','Mixed','Other','Prefer not to say'] },
+  { key:'zodiac',      label:'Zodiac Sign',     emoji:'♈', type:'select', options:['Aries','Taurus','Gemini','Cancer','Leo','Virgo','Libra','Scorpio','Sagittarius','Capricorn','Aquarius','Pisces'] },
+  { key:'religion',    label:'Religion',        emoji:'🙏', type:'select', options:['Christian','Catholic','Muslim','Jewish','Hindu','Buddhist','Spiritual','Atheist','Agnostic','Other','Prefer not to say'] },
+  { key:'politics',    label:'Politics',        emoji:'🗳️', type:'select', options:['Liberal','Conservative','Moderate','Apolitical','Prefer not to say'] },
+  { key:'languages',   label:'Languages',       emoji:'🌍', type:'text',   placeholder:'e.g. English, Spanish' },
+  { key:'hometown',    label:'Hometown',        emoji:'🏠', type:'text',   placeholder:'e.g. Nashville, TN' },
+];
+
+const GOALS_FIELDS = [
+  { key:'want_kids',         label:'Want Kids',            emoji:'👶', type:'select', options:['Yes','No','Open to it','Already have kids'] },
+  { key:'how_many_kids',     label:'How Many Kids',        emoji:'👨‍👩‍👧‍👦', type:'select', options:['1','2','3','4+','Not sure'] },
+  { key:'marriage',          label:'Marriage',             emoji:'💍', type:'select', options:['Yes, I want to get married','No','Open to it'] },
+  { key:'where_to_marry',    label:'Where to Marry',       emoji:'💒', type:'select', options:['Beach','Church','Destination','Courthouse','Backyard','Not sure'] },
+  { key:'where_to_live',     label:'Where to Live',        emoji:'🏡', type:'select', options:['Big city','Suburbs','Small town','Countryside','Travel the world','Not sure'] },
+  { key:'career_goals',      label:'Career Goals',         emoji:'💼', type:'select', options:['Entrepreneur','Corporate career','Creative field','Healthcare','Education','Military','Not sure'] },
+  { key:'financial_goals',   label:'Financial Goals',      emoji:'💰', type:'select', options:['Buy a house','Retire early','Travel the world','Build wealth','Live comfortably','Not sure'] },
+  { key:'relationship_timeline', label:'Relationship Timeline', emoji:'⏳', type:'select', options:['Ready now','Taking it slow','Not sure yet','Eventually'] },
+  { key:'long_distance',     label:'Open to Long Distance',emoji:'✈️', type:'select', options:['Yes','No','Maybe'] },
+  { key:'adventure_goals',   label:'Adventure Goals',      emoji:'🌍', type:'select', options:['Travel every year','Visit every continent','Try new things monthly','Homebody','Not sure'] },
+  { key:'family_closeness',  label:'Family Closeness',     emoji:'👨‍👩‍👦', type:'select', options:['Very close family','Independent','Somewhere between'] },
+  { key:'spiritual_goals',   label:'Spiritual Goals',      emoji:'✨', type:'select', options:['Grow in faith','Find my beliefs','Already grounded','Not religious'] },
+];
+
 export default function ProfileScreen() {
   const router = useRouter();
   const { showToast, toastJSX } = useToast();
@@ -96,12 +121,12 @@ export default function ProfileScreen() {
   const [editBio, setEditBio]                   = useState('');
   const [editSaving, setEditSaving]             = useState(false);
   const [aboutMeModal, setAboutMeModal]         = useState(false);
-  const [aboutMeTab, setAboutMeTab]             = useState<'interests' | 'knowme'>('interests');
-  const [editingInterest, setEditingInterest]   = useState<number>(0);
-  const [selectedCategory, setSelectedCategory] = useState<any>(null);
-  const [interestDesc, setInterestDesc]         = useState('');
+  const [customOptions, setCustomOptions]       = useState<Record<string,string[]>>({});
+  const [customEntryField, setCustomEntryField] = useState<string|null>(null);
+  const [customEntryValue, setCustomEntryValue] = useState('');
   const [photoSlotModal, setPhotoSlotModal]     = useState(false);
   const [activePhotoIndex, setActivePhotoIndex] = useState(0);
+  const [previewModal, setPreviewModal]         = useState(false);
 
   useEffect(() => { loadProfile(); }, []);
 
@@ -123,7 +148,7 @@ export default function ProfileScreen() {
         setKnowMe(data.get_to_know_me || {});
         const validCount = loadedPhotos.filter((p: string) => p).length;
         if (validCount < 4) {
-          showToast('📸', 'More Photos Needed', 'You need at least 4 photos to use Allure.');
+          showToast('You need at least 4 photos to use Allure');
         }
       }
     } catch (err) {
@@ -138,7 +163,7 @@ export default function ProfileScreen() {
     if (!photoUri) {
       const { status: libraryStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (libraryStatus !== 'granted') {
-        showToast('❌', 'Permission needed', 'Please allow photo access in Settings');
+        showToast('Allow photo access in Settings');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -164,9 +189,8 @@ export default function ProfileScreen() {
       await supabase.from('profiles')
         .update({ photo_urls: newPhotos.filter(p => p) })
         .eq('id', userData.user.id);
-      showToast('✨', 'Photo uploaded!');
     } catch (err: any) {
-      showToast('❌', 'Upload failed', err.message);
+      showToast(err.message || 'Upload failed');
     } finally {
       setUploading(false);
     }
@@ -175,7 +199,7 @@ export default function ProfileScreen() {
   async function takeSelfie(index: number) {
     const { status: cameraStatus } = await ImagePicker.requestCameraPermissionsAsync();
     if (cameraStatus !== 'granted') {
-      showToast('❌', 'Permission needed', 'Please allow camera access in Settings');
+      showToast('Allow camera access in Settings');
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -193,11 +217,12 @@ export default function ProfileScreen() {
   }
 
   async function doUploadProfilePic(uri: string) {
+    console.log('uploading pic', uri);
     setUploadingProfilePic(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
       if (!userData.user) return;
-      const fileName = `${userData.user.id}_profile_pic.jpg`;
+      const fileName = `${userData.user.id}_profile_pic_${Date.now()}.jpg`;
       const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' as any });
       const byteArray = Uint8Array.from(atob(base64).split('').map((c: string) => c.charCodeAt(0)));
       const { error: uploadError } = await supabase.storage
@@ -208,9 +233,8 @@ export default function ProfileScreen() {
       await supabase.from('profiles')
         .update({ profile_picture: urlData.publicUrl })
         .eq('id', userData.user.id);
-      showToast('✨', 'Profile picture updated!');
     } catch (err: any) {
-      showToast('❌', 'Upload failed', err.message);
+      showToast(err.message || 'Upload failed');
     } finally {
       setUploadingProfilePic(false);
     }
@@ -238,31 +262,44 @@ export default function ProfileScreen() {
     await supabase.from('profiles').update({ photo_urls: newPhotos }).eq('id', userData.user.id);
   }
 
-  function openInterestEdit(index: number) {
-    setEditingInterest(index);
-    const existing = interests[index];
-    if (existing) {
-      setSelectedCategory({ emoji: existing.emoji, label: existing.label });
-      setInterestDesc(existing.desc || '');
+  async function toggleInterestDirect(cat: {emoji:string, label:string}) {
+    const exists = interests.some((i: any) => i.label === cat.label);
+    let newInterests: any[];
+    if (exists) {
+      newInterests = interests.filter((i: any) => i.label !== cat.label);
+    } else if (interests.length < 5) {
+      newInterests = [...interests, { emoji: cat.emoji, label: cat.label, desc: '' }];
     } else {
-      setSelectedCategory(null);
-      setInterestDesc('');
+      return;
     }
-  }
-
-  async function saveInterest() {
-    if (!selectedCategory) { showToast('⚠️', 'Pick a category first'); return; }
-    const newInterests = [...interests];
-    newInterests[editingInterest] = {
-      emoji: selectedCategory.emoji,
-      label: selectedCategory.label,
-      desc: interestDesc.trim(),
-    };
     setInterests(newInterests);
     const { data: userData } = await supabase.auth.getUser();
     if (!userData.user) return;
     await supabase.from('profiles').update({ interests: newInterests }).eq('id', userData.user.id);
-    showToast('✅', 'Interest saved!');
+  }
+
+  function openCustomEntry(fieldKey: string) {
+    setCustomEntryField(fieldKey);
+    setCustomEntryValue('');
+  }
+
+  function confirmCustomEntry() {
+    const trimmed = customEntryValue.trim();
+    if (!trimmed || !customEntryField) return;
+    if (customEntryField === 'interest') {
+      if (interests.length < 5) {
+        const newInterests = [...interests, { emoji: '✨', label: trimmed, desc: '' }];
+        setInterests(newInterests);
+        supabase.auth.getUser().then(({ data }) => {
+          if (data.user) supabase.from('profiles').update({ interests: newInterests }).eq('id', data.user.id);
+        });
+      }
+    } else {
+      setCustomOptions(prev => ({ ...prev, [customEntryField]: [...(prev[customEntryField] || []), trimmed] }));
+      saveKnowMeField(customEntryField, trimmed);
+    }
+    setCustomEntryField(null);
+    setCustomEntryValue('');
   }
 
   async function saveKnowMeField(key: string, value: string) {
@@ -290,7 +327,7 @@ export default function ProfileScreen() {
   }
 
   async function saveEditProfile() {
-    if (!editName.trim()) { showToast('⚠️', 'Name required', 'Please enter your name'); return; }
+    if (!editName.trim()) { showToast('Name is required'); return; }
     setEditSaving(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
@@ -306,9 +343,8 @@ export default function ProfileScreen() {
       setBio(editBio);
       setProfile((prev: any) => ({ ...prev, ...updates }));
       setEditProfileModal(false);
-      showToast('✅', 'Profile saved!');
     } catch (err: any) {
-      showToast('❌', 'Save failed', err.message);
+      showToast(err.message || 'Save failed');
     } finally {
       setEditSaving(false);
     }
@@ -317,7 +353,7 @@ export default function ProfileScreen() {
   function checkPhotoRequirement() {
     const validCount = photos.filter(p => p).length;
     if (validCount < 4) {
-      showToast('📸', 'More Photos Needed', 'You need at least 4 photos to use Allure.');
+      showToast('You need at least 4 photos to use Allure');
       return false;
     }
     return true;
@@ -354,103 +390,77 @@ export default function ProfileScreen() {
     </View>
   );
 
-  const tierColor   = getTierColor(profile?.tier || 'Bloom');
-  const tierEmoji   = getTierEmoji(profile?.tier || 'Bloom');
   const validPhotos = photos.filter(p => p);
-  const knowMeCount = Object.keys(knowMe).filter(k => knowMe[k]).length;
+  const firstName   = profile?.name?.split(' ')[0] || 'Your Name';
 
   return (
     <View style={s.container}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-        <View style={s.pageWrap}>
 
-        {/* TOP PHOTO BANNER */}
+        {/* PHOTO BANNER */}
         <View style={s.banner}>
           {profilePicture ? (
             <Image source={{ uri: profilePicture }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
           ) : (
-            <LinearGradient colors={['#3a0025', '#1a000f']} style={StyleSheet.absoluteFillObject} />
+            <LinearGradient colors={['#3d0020', '#1a000e']} style={StyleSheet.absoluteFillObject} />
           )}
-          {/* Dark gradient overlay */}
-          <LinearGradient
-            colors={['transparent', '#07000c']}
-            style={StyleSheet.absoluteFillObject}
-          />
-
-          {/* Allure wordmark */}
-          <Text style={s.bannerWordmark}>Allure</Text>
-
-          {/* Bottom info row */}
+          <LinearGradient colors={['transparent', '#07000c']} style={StyleSheet.absoluteFillObject} />
+          <Text style={s.bannerLogo}>Allure</Text>
+          {/* Name + Age */}
           <View style={s.bannerBottom}>
-            <View style={{ flexShrink: 1, marginRight: 8 }}>
-              <Text style={s.bannerName}>{profile?.name || 'Your Name'}</Text>
-              {profile?.age ? <Text style={s.bannerAge}>Age {profile.age}</Text> : null}
-            </View>
-            <View style={s.bannerTierPill}>
-              <Text style={s.bannerTierTxt}>{tierEmoji} {profile?.score || 0}</Text>
-            </View>
+            <Text style={s.bannerName}>{firstName}</Text>
+            {profile?.age ? <Text style={s.bannerAge}>Age {profile.age}</Text> : null}
           </View>
-        </View>
-
-        {/* BELOW BANNER */}
-        <View style={s.below}>
-
-          {bio ? <Text style={s.bio}>{bio}</Text> : null}
-
-          {interests.length > 0 && (
-            <View style={s.pillsRow}>
-              {interests.slice(0, 3).map((int, i) => (
-                <View key={i} style={s.interestPill}>
-                  <Text style={s.interestPillTxt}>{int.emoji} {int.label}</Text>
-                </View>
-              ))}
+          {/* Score pill */}
+          {profile?.score ? (
+            <View style={s.scorePill}>
+              <Text style={s.scorePillTxt}>✦ {profile.score}</Text>
             </View>
-          )}
-
-          <View style={s.divider} />
-
-          {/* Edit Profile */}
-          <TouchableOpacity style={s.listRow} onPress={openEditProfile}>
-            <Text style={s.listRowTxt}>Edit Profile</Text>
-            <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
-          </TouchableOpacity>
-          <View style={s.rowDivider} />
-
-          {/* About Me */}
-          <TouchableOpacity style={s.listRow} onPress={() => { setAboutMeTab('interests'); setAboutMeModal(true); }}>
-            <Text style={s.listRowTxt}>About Me</Text>
-            <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
-          </TouchableOpacity>
-          <View style={s.rowDivider} />
-
-          {/* Rescan My Face */}
-          <TouchableOpacity style={s.listRow} onPress={() => router.push('/facescan')}>
-            <Text style={s.listRowTxt}>Rescan My Face</Text>
-            <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
-          </TouchableOpacity>
-          <View style={s.rowDivider} />
-
-          {/* Terms of Service */}
-          <TouchableOpacity style={s.listRow} onPress={() => router.push('/terms')}>
-            <Text style={s.listRowTxt}>Terms of Service</Text>
-            <Ionicons name="chevron-forward" size={16} color="#ff4d82" />
-          </TouchableOpacity>
-
-          <View style={s.divider} />
-
-          {/* Upgrade */}
-          <TouchableOpacity style={s.upgradeBtn} onPress={() => router.push('/subscription')}>
-            <Text style={s.upgradeTxt}>✨ Upgrade to Allure+</Text>
-          </TouchableOpacity>
-
-          {/* Log Out */}
-          <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
-            <Text style={s.logoutTxt}>Log Out</Text>
-          </TouchableOpacity>
-
+          ) : null}
         </View>
 
-        </View>{/* end pageWrap */}
+        {/* BIO */}
+        {bio ? <Text style={s.bio}>{bio}</Text> : null}
+
+        {/* DIVIDER */}
+        <View style={s.divider} />
+
+        {/* LIST ROWS */}
+        <TouchableOpacity style={s.listRow} onPress={openEditProfile}>
+          <Text style={s.listRowTxt}>Edit Profile</Text>
+          <Ionicons name="chevron-forward" size={16} color="rgba(255,77,130,0.6)" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={s.listRow} onPress={() => setPreviewModal(true)}>
+          <Text style={s.listRowTxt}>View My Profile</Text>
+          <Ionicons name="chevron-forward" size={16} color="rgba(255,77,130,0.6)" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={s.listRow} onPress={() => setAboutMeModal(true)}>
+          <Text style={s.listRowTxt}>About Me</Text>
+          <Ionicons name="chevron-forward" size={16} color="rgba(255,77,130,0.6)" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={s.listRow} onPress={() => router.push('/facescan')}>
+          <Text style={s.listRowTxt}>Rescan My Face</Text>
+          <Ionicons name="chevron-forward" size={16} color="rgba(255,77,130,0.6)" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={s.listRow} onPress={() => router.push('/terms')}>
+          <Text style={s.listRowTxt}>Terms of Service</Text>
+          <Ionicons name="chevron-forward" size={16} color="rgba(255,77,130,0.6)" />
+        </TouchableOpacity>
+
+        {/* UPGRADE BUTTON */}
+        <TouchableOpacity style={s.upgradeBtn} onPress={() => router.push('/subscription')}>
+          <Text style={s.upgradeTxt}>✨ Upgrade to Allure+</Text>
+        </TouchableOpacity>
+
+        {/* LOG OUT */}
+        <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
+          <Text style={s.logoutTxt}>Log Out</Text>
+        </TouchableOpacity>
+
       </ScrollView>
 
       {/* Edit Profile Modal */}
@@ -484,7 +494,7 @@ export default function ProfileScreen() {
                         style={{ borderWidth: 1, borderColor: '#ff4d82', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 7 }}
                         onPress={async () => {
                           const { status } = await ImagePicker.requestCameraPermissionsAsync();
-                          if (status !== 'granted') { showToast('❌', 'Permission needed', 'Allow camera access in Settings'); return; }
+                          if (status !== 'granted') { showToast('Allow camera access in Settings'); return; }
                           const result = await ImagePicker.launchCameraAsync({ cameraType: ImagePicker.CameraType.front, allowsEditing: true, quality: 0.8 });
                           if (!result.canceled && result.assets[0]) {
                             const flipped = await ImageManipulator.manipulateAsync(
@@ -502,7 +512,7 @@ export default function ProfileScreen() {
                         style={{ borderWidth: 1, borderColor: '#ff4d82', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 7 }}
                         onPress={async () => {
                           const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                          if (status !== 'granted') { showToast('❌', 'Permission needed', 'Allow photo access in Settings'); return; }
+                          if (status !== 'granted') { showToast('Allow photo access in Settings'); return; }
                           const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.8 });
                           if (!result.canceled && result.assets[0]) await doUploadProfilePic(result.assets[0].uri);
                         }}
@@ -629,7 +639,7 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
-      {/* About Me Modal (Interests + Get to Know Me tabs) */}
+      {/* About Me Modal — single scrollable page */}
       <Modal visible={aboutMeModal} transparent animationType="slide">
         <View style={s.modalOverlay}>
           <View style={[s.modalCard, { maxHeight:'94%' }]}>
@@ -640,117 +650,265 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Tabs */}
-            <View style={s.tabRow}>
-              <TouchableOpacity
-                style={[s.tabBtn, aboutMeTab === 'interests' && s.tabBtnActive]}
-                onPress={() => setAboutMeTab('interests')}
-              >
-                <Text style={[s.tabBtnTxt, aboutMeTab === 'interests' && s.tabBtnTxtActive]}>Interests</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.tabBtn, aboutMeTab === 'knowme' && s.tabBtnActive]}
-                onPress={() => setAboutMeTab('knowme')}
-              >
-                <Text style={[s.tabBtnTxt, aboutMeTab === 'knowme' && s.tabBtnTxtActive]}>Get to Know Me</Text>
-              </TouchableOpacity>
-            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
 
-            {/* Interests tab */}
-            {aboutMeTab === 'interests' && (
-              <>
-                <Text style={s.modalSub}>Up to 5 interests shown on your profile</Text>
-                <View style={s.currentInterests}>
-                  {[0,1,2,3,4].map(i => (
-                    <TouchableOpacity
-                      key={i}
-                      style={[s.interestSlot, interests[i] && { borderColor:'rgba(255,77,130,0.4)', backgroundColor:'rgba(255,77,130,0.08)' }]}
-                      onPress={() => openInterestEdit(i)}
-                    >
-                      {interests[i]
-                        ? <Text style={s.interestSlotTxt}>{interests[i].emoji} {interests[i].label}</Text>
-                        : <Text style={s.interestSlotEmpty}>+ Add</Text>
-                      }
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <Text style={s.modalLabel}>Pick a category</Text>
-                <ScrollView style={s.categoryScroll} showsVerticalScrollIndicator={false}>
-                  <View style={s.categoryGrid}>
-                    {INTEREST_CATEGORIES.map(cat => (
-                      <TouchableOpacity
-                        key={cat.label}
-                        style={[s.categoryPill, selectedCategory?.label === cat.label && s.categoryPillSelected]}
-                        onPress={() => setSelectedCategory(cat)}
-                      >
-                        <Text style={s.categoryEmoji}>{cat.emoji}</Text>
-                        <Text style={[s.categoryLabel, selectedCategory?.label === cat.label && s.categoryLabelSelected]}>
-                          {cat.label}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </ScrollView>
-                <TextInput
-                  style={s.modalInput}
-                  placeholder="Add your own description (optional)"
-                  placeholderTextColor="rgba(255,255,255,0.2)"
-                  value={interestDesc}
-                  onChangeText={setInterestDesc}
-                  maxLength={60}
-                />
-                <TouchableOpacity style={s.saveBtn} onPress={saveInterest}>
-                  <Text style={s.saveBtnTxt}>Save Interest</Text>
+              {/* ── INTERESTS ── */}
+              <View style={s.sectionHeaderRow}>
+                <Text style={s.sectionLabel}>INTERESTS</Text>
+                <TouchableOpacity style={s.addCircle} onPress={() => openCustomEntry('interest')}>
+                  <Text style={s.addCircleTxt}>+</Text>
                 </TouchableOpacity>
-              </>
-            )}
+              </View>
+              <Text style={s.modalSub}>Tap to select up to 5 · {interests.length}/5</Text>
+              <View style={s.allPillsWrap}>
+                {INTEREST_CATEGORIES.map(cat => {
+                  const isSelected = interests.some((i: any) => i.label === cat.label);
+                  const isMaxed = !isSelected && interests.length >= 5;
+                  return (
+                    <TouchableOpacity
+                      key={cat.label}
+                      style={[s.interestPillAll, isSelected && s.interestPillAllSelected, isMaxed && { opacity:0.25 }]}
+                      onPress={() => toggleInterestDirect(cat)}
+                      disabled={isMaxed}
+                    >
+                      <Text style={[s.interestPillAllTxt, isSelected && s.interestPillAllTxtSelected]}>
+                        {cat.emoji} {cat.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
 
-            {/* Get to Know Me tab */}
-            {aboutMeTab === 'knowme' && (
-              <>
-                <Text style={s.modalSub}>Fill out what you're comfortable sharing</Text>
-                <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight:'80%' }}>
-                  {KNOW_ME_FIELDS.map(field => (
-                    <View key={field.key} style={s.knowMeField}>
-                      <View style={s.knowMeFieldLeft}>
-                        <Text style={s.knowMeFieldEmoji}>{field.emoji}</Text>
-                        <Text style={s.knowMeFieldLabel}>{field.label}</Text>
+              {/* Custom entry inline (interests) */}
+              {customEntryField === 'interest' && (
+                <View style={s.customEntryRow}>
+                  <TextInput
+                    style={[s.knowMeInput, { flex:1 }]}
+                    placeholder="Custom interest..."
+                    placeholderTextColor="rgba(255,255,255,0.2)"
+                    value={customEntryValue}
+                    onChangeText={setCustomEntryValue}
+                    autoFocus
+                    onSubmitEditing={confirmCustomEntry}
+                  />
+                  <TouchableOpacity style={s.customEntryAdd} onPress={confirmCustomEntry}>
+                    <Text style={s.customEntryAddTxt}>Add</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => setCustomEntryField(null)}>
+                    <Ionicons name="close" size={18} color="rgba(255,255,255,0.3)" />
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              <View style={s.sectionDivider} />
+
+              {/* ── PERSONAL ── */}
+              <View style={s.sectionHeaderRow}>
+                <Text style={s.sectionLabel}>PERSONAL</Text>
+              </View>
+              {PERSONAL_FIELDS.map(field => (
+                <View key={field.key} style={s.knowMeField}>
+                  <View style={s.knowMeFieldLeft}>
+                    <Text style={s.knowMeFieldEmoji}>{field.emoji}</Text>
+                    <Text style={s.knowMeFieldLabel}>{field.label}</Text>
+                  </View>
+                  {field.type === 'text' ? (
+                    <TextInput
+                      style={s.knowMeInput}
+                      placeholder={field.placeholder}
+                      placeholderTextColor="rgba(255,255,255,0.15)"
+                      value={knowMe[field.key] || ''}
+                      onChangeText={v => setKnowMe({ ...knowMe, [field.key]: v })}
+                      onBlur={() => saveKnowMeField(field.key, knowMe[field.key] || '')}
+                    />
+                  ) : (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.optionsScroll}>
+                      <View style={s.optionsRow}>
+                        {[...(field.options || []), ...(customOptions[field.key] || [])].map(opt => (
+                          <TouchableOpacity
+                            key={opt}
+                            style={[s.optionPill, knowMe[field.key] === opt && s.optionPillSelected]}
+                            onPress={() => saveKnowMeField(field.key, opt)}
+                          >
+                            <Text style={[s.optionPillTxt, knowMe[field.key] === opt && s.optionPillTxtSelected]}>{opt}</Text>
+                          </TouchableOpacity>
+                        ))}
+                        <TouchableOpacity style={s.inlineAddBtn} onPress={() => openCustomEntry(field.key)}>
+                          <Text style={s.inlineAddBtnTxt}>+</Text>
+                        </TouchableOpacity>
                       </View>
-                      {field.type === 'text' ? (
-                        <TextInput
-                          style={s.knowMeInput}
-                          placeholder={field.placeholder}
-                          placeholderTextColor="rgba(255,255,255,0.15)"
-                          value={knowMe[field.key] || ''}
-                          onChangeText={v => setKnowMe({ ...knowMe, [field.key]: v })}
-                          onBlur={() => saveKnowMeField(field.key, knowMe[field.key] || '')}
-                        />
-                      ) : (
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.optionsScroll}>
-                          <View style={s.optionsRow}>
-                            {field.options?.map(opt => (
-                              <TouchableOpacity
-                                key={opt}
-                                style={[s.optionPill, knowMe[field.key] === opt && s.optionPillSelected]}
-                                onPress={() => saveKnowMeField(field.key, opt)}
-                              >
-                                <Text style={[s.optionPillTxt, knowMe[field.key] === opt && s.optionPillTxtSelected]}>
-                                  {opt}
-                                </Text>
-                              </TouchableOpacity>
-                            ))}
-                          </View>
-                        </ScrollView>
-                      )}
+                    </ScrollView>
+                  )}
+                  {customEntryField === field.key && (
+                    <View style={s.customEntryRow}>
+                      <TextInput
+                        style={[s.knowMeInput, { flex:1 }]}
+                        placeholder="Custom value..."
+                        placeholderTextColor="rgba(255,255,255,0.2)"
+                        value={customEntryValue}
+                        onChangeText={setCustomEntryValue}
+                        autoFocus
+                        onSubmitEditing={confirmCustomEntry}
+                      />
+                      <TouchableOpacity style={s.customEntryAdd} onPress={confirmCustomEntry}>
+                        <Text style={s.customEntryAddTxt}>Add</Text>
+                      </TouchableOpacity>
                     </View>
-                  ))}
-                </ScrollView>
-              </>
-            )}
+                  )}
+                </View>
+              ))}
+
+              <View style={s.sectionDivider} />
+
+              {/* ── GOALS ── */}
+              <View style={s.sectionHeaderRow}>
+                <Text style={s.sectionLabel}>GOALS</Text>
+              </View>
+              {GOALS_FIELDS.map(field => (
+                <View key={field.key} style={s.knowMeField}>
+                  <View style={[s.knowMeFieldLeft, { justifyContent:'space-between' }]}>
+                    <View style={{ flexDirection:'row', alignItems:'center', gap:8 }}>
+                      <Text style={s.knowMeFieldEmoji}>{field.emoji}</Text>
+                      <Text style={s.knowMeFieldLabel}>{field.label}</Text>
+                    </View>
+                    <TouchableOpacity style={s.inlineAddBtn} onPress={() => openCustomEntry(field.key)}>
+                      <Text style={s.inlineAddBtnTxt}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.optionsScroll}>
+                    <View style={s.optionsRow}>
+                      {[...(field.options || []), ...(customOptions[field.key] || [])].map(opt => (
+                        <TouchableOpacity
+                          key={opt}
+                          style={[s.optionPill, knowMe[field.key] === opt && s.optionPillSelected]}
+                          onPress={() => saveKnowMeField(field.key, opt)}
+                        >
+                          <Text style={[s.optionPillTxt, knowMe[field.key] === opt && s.optionPillTxtSelected]}>{opt}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </ScrollView>
+                  {customEntryField === field.key && (
+                    <View style={s.customEntryRow}>
+                      <TextInput
+                        style={[s.knowMeInput, { flex:1 }]}
+                        placeholder="Custom goal..."
+                        placeholderTextColor="rgba(255,255,255,0.2)"
+                        value={customEntryValue}
+                        onChangeText={setCustomEntryValue}
+                        autoFocus
+                        onSubmitEditing={confirmCustomEntry}
+                      />
+                      <TouchableOpacity style={s.customEntryAdd} onPress={confirmCustomEntry}>
+                        <Text style={s.customEntryAddTxt}>Add</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              ))}
+
+              <View style={s.sectionDivider} />
+
+              {/* ── GET TO KNOW ME ── */}
+              <View style={s.sectionHeaderRow}>
+                <Text style={s.sectionLabel}>GET TO KNOW ME</Text>
+              </View>
+              {KNOW_ME_FIELDS.map(field => (
+                <View key={field.key} style={s.knowMeField}>
+                  <View style={s.knowMeFieldLeft}>
+                    <Text style={s.knowMeFieldEmoji}>{field.emoji}</Text>
+                    <Text style={s.knowMeFieldLabel}>{field.label}</Text>
+                  </View>
+                  {field.type === 'text' ? (
+                    <TextInput
+                      style={s.knowMeInput}
+                      placeholder={field.placeholder}
+                      placeholderTextColor="rgba(255,255,255,0.15)"
+                      value={knowMe[field.key] || ''}
+                      onChangeText={v => setKnowMe({ ...knowMe, [field.key]: v })}
+                      onBlur={() => saveKnowMeField(field.key, knowMe[field.key] || '')}
+                    />
+                  ) : (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.optionsScroll}>
+                      <View style={s.optionsRow}>
+                        {field.options?.map(opt => (
+                          <TouchableOpacity
+                            key={opt}
+                            style={[s.optionPill, knowMe[field.key] === opt && s.optionPillSelected]}
+                            onPress={() => saveKnowMeField(field.key, opt)}
+                          >
+                            <Text style={[s.optionPillTxt, knowMe[field.key] === opt && s.optionPillTxtSelected]}>{opt}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </ScrollView>
+                  )}
+                </View>
+              ))}
+
+              <View style={{ height:30 }} />
+            </ScrollView>
           </View>
         </View>
       </Modal>
 
+
+      {/* Preview Modal */}
+      <Modal visible={previewModal} transparent animationType="fade">
+        <View style={s.previewContainer}>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* All photos stacked */}
+            {validPhotos.length > 0 ? validPhotos.map((uri, i) => (
+              <View key={i} style={s.previewBanner}>
+                <Image source={{ uri }} style={s.previewBannerImg} resizeMode="cover" />
+                {i === 0 && (
+                  <>
+                    <LinearGradient colors={['transparent', '#07000c']} style={s.previewBannerGradient} />
+                    <View style={s.previewBannerBottom}>
+                      <Text style={s.previewName}>
+                        {firstName}{profile?.age ? `, ${profile.age}` : ''}
+                      </Text>
+                      {profile?.score ? (
+                        <View style={s.scorePill}>
+                          <Text style={s.scorePillTxt}>✦ {profile.score}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </>
+                )}
+              </View>
+            )) : (
+              <View style={s.previewBanner}>
+                <View style={[s.previewBannerImg, { backgroundColor:'rgba(255,255,255,0.05)', alignItems:'center', justifyContent:'center' }]}>
+                  <Ionicons name="person" size={80} color="rgba(255,255,255,0.1)" />
+                </View>
+                <LinearGradient colors={['transparent', '#07000c']} style={s.previewBannerGradient} />
+                <View style={s.previewBannerBottom}>
+                  <Text style={s.previewName}>{firstName}{profile?.age ? `, ${profile.age}` : ''}</Text>
+                </View>
+              </View>
+            )}
+
+            {bio ? <Text style={s.previewBio}>{bio}</Text> : null}
+
+            {interests.length > 0 && (
+              <View style={s.previewInterestRow}>
+                {interests.map((int, i) => (
+                  <View key={i} style={s.interestPill}>
+                    <Text style={s.interestPillTxt}>{int.emoji} {int.label}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            <Text style={s.previewNote}>You are viewing your profile as others see it</Text>
+          </ScrollView>
+
+          <TouchableOpacity style={s.previewClose} onPress={() => setPreviewModal(false)}>
+            <Ionicons name="close" size={22} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </Modal>
 
       {toastJSX}
     </View>
@@ -758,49 +916,71 @@ export default function ProfileScreen() {
 }
 
 const s = StyleSheet.create({
+  // Container
   container:            { flex:1, backgroundColor:'#07000c' },
-  scroll:               { flexGrow:1, backgroundColor:'#07000c' },
-  pageWrap:             { flex:1, minHeight:windowHeight, justifyContent:'flex-end' },
+  scroll:               { flexGrow:1, backgroundColor:'#07000c', paddingBottom:120 },
 
   // Banner
-  banner:               { position:'absolute', top:0, left:0, right:0, minHeight:windowHeight * 0.55, overflow:'hidden' },
-  bannerWordmark:       { position:'absolute', top:52, left:16, fontSize:13, fontStyle:'italic', color:'#ff4d82', fontWeight:'600', letterSpacing:0.5 },
-  cameraBadge:          { position:'absolute', bottom:52, left:16, width:30, height:30, borderRadius:15, backgroundColor:'#ff4d82', alignItems:'center', justifyContent:'center', zIndex:10 },
-  bannerBottom:         { position:'absolute', bottom:40, left:0, right:0, flexDirection:'row', justifyContent:'space-between', alignItems:'flex-end', paddingHorizontal:16, paddingBottom:16 },
-  bannerName:           { fontSize:20, fontWeight:'700', color:'#fff', letterSpacing:0.2, flexShrink:1, flexWrap:'wrap' },
-  bannerAge:            { fontSize:13, color:'rgba(255,255,255,0.45)', marginTop:2 },
-  bannerTierPill:       { backgroundColor:'#ff4d82', borderRadius:50, paddingHorizontal:12, paddingVertical:5, flexShrink:0 },
-  bannerTierTxt:        { color:'#fff', fontSize:13, fontWeight:'700' },
+  banner:               { width:'100%', height:windowHeight * 0.65, position:'relative', overflow:'hidden' },
+  bannerLogo:           { position:'absolute', top:54, left:16, fontSize:16, fontStyle:'italic', color:'#ff4d82', fontWeight:'200', letterSpacing:3 },
+  bannerBottom:         { position:'absolute', bottom:20, left:16 },
+  bannerName:           { fontSize:24, fontWeight:'800', color:'#fff' },
+  bannerAge:            { fontSize:14, color:'rgba(255,255,255,0.6)', marginTop:3 },
+  scorePill:            { position:'absolute', bottom:20, right:16, backgroundColor:'#ff4d82', borderRadius:50, paddingHorizontal:14, paddingVertical:8 },
+  scorePillTxt:         { fontSize:13, fontWeight:'700', color:'#fff' },
 
-  // Below banner
-  below:                { backgroundColor:'#07000c', paddingTop:0, paddingBottom:120 },
-  bio:                  { fontSize:13, color:'rgba(255,255,255,0.42)', fontStyle:'italic', paddingHorizontal:16, paddingTop:12, paddingBottom:4, lineHeight:20 },
-  pillsRow:             { flexDirection:'row', gap:8, paddingHorizontal:16, paddingTop:10, marginBottom:14, flexWrap:'nowrap' },
+  // Bio
+  bio:                  { paddingHorizontal:16, paddingTop:12, fontSize:14, color:'rgba(255,255,255,0.5)', fontStyle:'italic', lineHeight:20 },
+
+  // Divider
+  divider:              { height:1, backgroundColor:'rgba(255,255,255,0.07)', marginTop:14 },
+
+  // List rows
+  listRow:              { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingHorizontal:22, paddingVertical:17, borderBottomWidth:1, borderBottomColor:'rgba(255,255,255,0.06)' },
+  listRowTxt:           { fontSize:16, color:'rgba(255,255,255,0.85)', fontWeight:'500' },
+
+  // Interest pills (shared)
   interestPill:         { paddingHorizontal:12, paddingVertical:5, borderRadius:50, borderWidth:1, borderColor:'#ff4d82', backgroundColor:'rgba(255,77,130,0.10)' },
   interestPillTxt:      { fontSize:12, color:'#ff4d82', fontWeight:'600' },
 
-  // Dividers
-  divider:              { height:1, backgroundColor:'rgba(255,255,255,0.06)', marginBottom:4 },
-  rowDivider:           { height:1, backgroundColor:'rgba(255,255,255,0.06)', marginHorizontal:16 },
-
-  // List rows
-  listRow:              { flexDirection:'row', justifyContent:'space-between', alignItems:'center', paddingHorizontal:16, paddingVertical:16 },
-  listRowTxt:           { fontSize:15, color:'rgba(255,255,255,0.85)', fontWeight:'500' },
-
   // Upgrade button
-  upgradeBtn:           { marginHorizontal:16, marginTop:24, borderRadius:50, backgroundColor:'#ff4d82', paddingVertical:15, alignItems:'center' },
+  upgradeBtn:           { marginHorizontal:22, marginTop:22, borderRadius:50, backgroundColor:'#ff4d82', paddingVertical:15, alignItems:'center' },
   upgradeTxt:           { color:'#fff', fontSize:15, fontWeight:'700' },
 
   // Logout
   logoutBtn:            { alignItems:'center', marginTop:14, marginBottom:10, paddingVertical:14 },
-  logoutTxt:            { color:'rgba(255,255,255,0.32)', fontSize:14, fontWeight:'500' },
+  logoutTxt:            { color:'rgba(255,255,255,0.28)', fontSize:14, fontWeight:'500' },
+
+  // Preview Modal
+  previewContainer:     { flex:1, backgroundColor:'#07000c' },
+  previewBanner:        { width:'100%', height:windowHeight * 0.6, position:'relative' },
+  previewBannerImg:     { width:'100%', height:'100%' },
+  previewBannerGradient:{ position:'absolute', left:0, right:0, bottom:0, height:200 },
+  previewBannerBottom:  { position:'absolute', bottom:0, left:16, right:16, paddingBottom:20 },
+  previewName:          { fontSize:26, fontWeight:'800', color:'#fff', marginBottom:8 },
+  previewBio:           { paddingHorizontal:16, paddingTop:14, fontSize:14, color:'rgba(255,255,255,0.6)', fontStyle:'italic', lineHeight:21 },
+  previewInterestRow:   { flexDirection:'row', flexWrap:'wrap', gap:8, paddingHorizontal:16, marginTop:14 },
+  previewNote:          { fontSize:12, color:'rgba(255,77,130,0.6)', fontStyle:'italic', textAlign:'center', marginTop:24, marginBottom:40, paddingHorizontal:24 },
+  previewClose:         { position:'absolute', top:54, right:16, width:36, height:36, borderRadius:18, backgroundColor:'rgba(0,0,0,0.6)', alignItems:'center', justifyContent:'center' },
+
+  // Section headers (About Me scrollable)
+  sectionHeaderRow:     { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginTop:18, marginBottom:10 },
+  sectionLabel:         { fontSize:10, fontWeight:'700', color:'#ff4d82', letterSpacing:2, textTransform:'uppercase' },
+  sectionDivider:       { height:1, backgroundColor:'rgba(255,255,255,0.06)', marginVertical:10 },
+  addCircle:            { width:24, height:24, borderRadius:12, borderWidth:1, borderColor:'#ff4d82', alignItems:'center', justifyContent:'center', backgroundColor:'rgba(255,77,130,0.08)' },
+  addCircleTxt:         { fontSize:16, color:'#ff4d82', lineHeight:20 },
+  allPillsWrap:         { flexDirection:'row', flexWrap:'wrap', gap:8, marginBottom:10 },
+  interestPillAll:      { paddingHorizontal:12, paddingVertical:7, borderRadius:50, borderWidth:1, borderColor:'rgba(255,255,255,0.12)', backgroundColor:'rgba(255,255,255,0.06)' },
+  interestPillAllSelected:{ borderColor:'#ff4d82', backgroundColor:'rgba(255,77,130,0.18)' },
+  interestPillAllTxt:   { fontSize:12, color:'rgba(255,255,255,0.5)', fontWeight:'500' },
+  interestPillAllTxtSelected:{ color:'#ff4d82', fontWeight:'600' },
+  inlineAddBtn:         { width:26, height:26, borderRadius:13, borderWidth:1, borderColor:'rgba(255,77,130,0.35)', alignItems:'center', justifyContent:'center', backgroundColor:'rgba(255,77,130,0.06)', marginLeft:4 },
+  inlineAddBtnTxt:      { fontSize:15, color:'#ff4d82', lineHeight:18 },
+  customEntryRow:       { flexDirection:'row', alignItems:'center', gap:8, marginTop:8, marginBottom:4 },
+  customEntryAdd:       { paddingHorizontal:12, paddingVertical:8, borderRadius:50, backgroundColor:'#ff4d82' },
+  customEntryAddTxt:    { fontSize:12, color:'#fff', fontWeight:'700' },
 
   // Modals
-  tabRow:               { flexDirection:'row', gap:8, marginBottom:14 },
-  tabBtn:               { flex:1, paddingVertical:9, borderRadius:50, alignItems:'center', backgroundColor:'rgba(255,255,255,0.07)', borderWidth:1, borderColor:'rgba(255,255,255,0.1)' },
-  tabBtnActive:         { backgroundColor:'rgba(255,77,130,0.18)', borderColor:'#ff4d82' },
-  tabBtnTxt:            { fontSize:13, fontWeight:'600', color:'rgba(255,255,255,0.4)' },
-  tabBtnTxtActive:      { color:'#ff4d82' },
   modalOverlay:         { flex:1, backgroundColor:'rgba(0,0,0,0.9)', justifyContent:'flex-end' },
   modalCard:            { backgroundColor:'#1e0012', borderRadius:24, padding:22, maxHeight:'92%', borderWidth:1, borderColor:'rgba(255,255,255,0.12)' },
   modalHeader:          { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:6 },
@@ -818,17 +998,6 @@ const s = StyleSheet.create({
   charCount:            { fontSize:11, color:'rgba(255,255,255,0.2)', textAlign:'right', marginTop:4 },
   saveBtn:              { backgroundColor:'#ff4d82', borderRadius:50, padding:14, alignItems:'center', marginTop:12 },
   saveBtnTxt:           { color:'#fff', fontSize:14, fontWeight:'700' },
-  currentInterests:     { flexDirection:'row', flexWrap:'wrap', gap:6, marginBottom:12 },
-  interestSlot:         { paddingHorizontal:12, paddingVertical:7, borderRadius:50, borderWidth:1, borderColor:'rgba(255,255,255,0.15)', backgroundColor:'rgba(255,255,255,0.07)' },
-  interestSlotTxt:      { fontSize:13, color:'#ff4d82', fontWeight:'600' },
-  interestSlotEmpty:    { fontSize:13, color:'rgba(255,255,255,0.2)' },
-  categoryScroll:       { maxHeight:180, marginBottom:10 },
-  categoryGrid:         { flexDirection:'row', flexWrap:'wrap', gap:8 },
-  categoryPill:         { flexDirection:'row', alignItems:'center', gap:6, backgroundColor:'rgba(255,255,255,0.07)', borderRadius:20, paddingHorizontal:12, paddingVertical:8, borderWidth:1, borderColor:'rgba(255,255,255,0.12)' },
-  categoryPillSelected: { backgroundColor:'rgba(255,77,130,0.2)', borderColor:'#ff4d82' },
-  categoryEmoji:        { fontSize:14 },
-  categoryLabel:        { fontSize:12, color:'rgba(255,255,255,0.65)' },
-  categoryLabelSelected:{ color:'#ff4d82', fontWeight:'700' },
   modalInput:           { backgroundColor:'rgba(255,255,255,0.06)', borderRadius:12, borderWidth:1, borderColor:'rgba(255,255,255,0.08)', padding:12, fontSize:14, color:'#fff', marginBottom:4 },
   knowMeField:          { marginBottom:18 },
   knowMeFieldLeft:      { flexDirection:'row', alignItems:'center', gap:8, marginBottom:8 },

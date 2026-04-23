@@ -7,10 +7,10 @@ import type { UserTier } from '@/app/lib/subscription';
 // ── Product IDs (must match App Store Connect exactly) ────────────────────────
 
 export const PRODUCT_IDS = {
-  PLUS_MONTHLY:  'com.pgat.allure.plus.monthly',
-  PLUS_YEARLY:   'com.pgat.allure.plus.yearly',
-  PP_MONTHLY:    'com.pgat.allure.plusplus.monthly',
-  PP_YEARLY:     'com.pgat.allure.plusplus.yearly',
+  plusMonthly:     'com.pgat.allure.plus.monthly',
+  plusYearly:      'com.pgat.allure.plus.yearly',
+  plusplusMonthly: 'com.pgat.allure.plusplus.monthly',
+  plusplusYearly:  'com.pgat.allure.plusplus.yearly',
 } as const;
 
 export type ProductId = typeof PRODUCT_IDS[keyof typeof PRODUCT_IDS];

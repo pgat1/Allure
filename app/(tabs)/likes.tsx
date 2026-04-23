@@ -130,7 +130,7 @@ export default function AlluredScreen() {
                   )}
                   <View style={[s.tierDot, { backgroundColor: tierColor }]} />
                 </View>
-                <Text style={s.cardName} numberOfLines={1}>{item.name}</Text>
+                <Text style={s.cardName} numberOfLines={1}>{item.name?.split(' ')[0]}</Text>
                 <Text style={[s.cardTier, { color: tierColor }]}>
                   {getTierEmoji(item.tier)} {item.tier}
                 </Text>

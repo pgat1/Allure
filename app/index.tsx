@@ -19,6 +19,8 @@ export default function SplashScreen() {
         // Sync subscription tier from Supabase → AsyncStorage so
         // getUserTier() works correctly throughout the app session
         await checkSubscriptionStatus();
+        // Mark user as active on app load
+        supabase.from('profiles').update({ last_active: new Date().toISOString() }).eq('id', data.session.user.id);
         router.replace('/(tabs)/swipe');
       } else {
         router.replace('/auth');

@@ -1,62 +1,38 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Modal, StyleSheet, Text, View } from 'react-native';
+import { Animated, StyleSheet, Text } from 'react-native';
 
-interface ToastProps {
-  visible: boolean;
-  icon: string;
-  title: string;
-  subtitle?: string;
-  onHide: () => void;
-}
-
-function Toast({ visible, icon, title, subtitle, onHide }: ToastProps) {
-  const opacity = useRef(new Animated.Value(0)).current;
+function Toast({ visible, message, onHide }: { visible: boolean; message: string; onHide: () => void }) {
+  const translateY = useRef(new Animated.Value(-80)).current;
 
   useEffect(() => {
     if (!visible) return;
-    opacity.setValue(0);
-    Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    translateY.setValue(-80);
+    Animated.timing(translateY, { toValue: 0, duration: 220, useNativeDriver: true }).start();
     const timer = setTimeout(() => {
-      Animated.timing(opacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => onHide());
-    }, 2000);
+      Animated.timing(translateY, { toValue: -80, duration: 260, useNativeDriver: true }).start(() => onHide());
+    }, 2500);
     return () => clearTimeout(timer);
   }, [visible]);
 
   if (!visible) return null;
 
   return (
-    <Modal transparent animationType="none" visible={visible} statusBarTranslucent>
-      <View style={s.overlay}>
-        <Animated.View style={[s.card, { opacity }]}>
-          <Text style={s.icon}>{icon}</Text>
-          <Text style={s.title}>{title}</Text>
-          {subtitle ? <Text style={s.subtitle}>{subtitle}</Text> : null}
-        </Animated.View>
-      </View>
-    </Modal>
+    <Animated.View style={[s.bar, { transform: [{ translateY }] }]}>
+      <Text style={s.txt} numberOfLines={1}>{message}</Text>
+    </Animated.View>
   );
 }
 
 const s = StyleSheet.create({
-  overlay:  { flex:1, backgroundColor:'rgba(0,0,0,0.7)', alignItems:'center', justifyContent:'center' },
-  card:     { backgroundColor:'#111', borderRadius:20, padding:24, alignItems:'center', gap:10, borderWidth:1, borderColor:'rgba(255,77,130,0.2)', minWidth:220, maxWidth:300 },
-  icon:     { fontSize:40 },
-  title:    { fontSize:16, fontWeight:'700', color:'#fff', textAlign:'center' },
-  subtitle: { fontSize:13, color:'rgba(255,255,255,0.45)', textAlign:'center', lineHeight:18 },
+  bar: { position:'absolute', top:54, left:20, right:20, backgroundColor:'#ff4d82', borderRadius:8, paddingHorizontal:18, paddingVertical:10, zIndex:999 },
+  txt: { fontSize:13, color:'#fff', fontWeight:'600', textAlign:'center' },
 });
 
-interface ToastState {
-  visible: boolean;
-  icon: string;
-  title: string;
-  subtitle?: string;
-}
-
 export function useToast() {
-  const [state, setState] = useState<ToastState>({ visible: false, icon: '', title: '' });
+  const [state, setState] = useState({ visible: false, message: '' });
 
-  function showToast(icon: string, title: string, subtitle?: string) {
-    setState({ visible: true, icon, title, subtitle });
+  function showToast(message: string) {
+    setState({ visible: true, message });
   }
 
   function hideToast() {
@@ -64,13 +40,7 @@ export function useToast() {
   }
 
   const toastJSX = (
-    <Toast
-      visible={state.visible}
-      icon={state.icon}
-      title={state.title}
-      subtitle={state.subtitle}
-      onHide={hideToast}
-    />
+    <Toast visible={state.visible} message={state.message} onHide={hideToast} />
   );
 
   return { showToast, toastJSX };

@@ -112,8 +112,8 @@ export default function SubscriptionScreen() {
   const features = isPlus ? PLUS_FEATURES : PP_FEATURES;
 
   function getProductId(): ProductId {
-    if (isPlus)     return isMonthly ? PRODUCT_IDS.PLUS_MONTHLY  : PRODUCT_IDS.PLUS_YEARLY;
-    return isMonthly ? PRODUCT_IDS.PP_MONTHLY : PRODUCT_IDS.PP_YEARLY;
+    if (isPlus)   return isMonthly ? PRODUCT_IDS.plusMonthly     : PRODUCT_IDS.plusYearly;
+    return isMonthly ? PRODUCT_IDS.plusplusMonthly : PRODUCT_IDS.plusplusYearly;
   }
 
   async function handlePurchase() {
